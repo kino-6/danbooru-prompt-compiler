@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 
 try:
@@ -22,11 +21,18 @@ class CompileMode(str, Enum):
     character_safe = "character_safe"
 
 
+class InputType(str, Enum):
+    scene = "scene"
+    prompt = "prompt"
+
+
 class CompileRequest(BaseModel):
     scene_description: str = Field(min_length=1)
     variants: int = Field(default=1, ge=1, le=10)
     mode: CompileMode = CompileMode.subtle
     preset_name: str | None = None
+    input_type: InputType = InputType.scene
+    edit_instruction: str | None = None
 
 
 class CompileResult(BaseModel):

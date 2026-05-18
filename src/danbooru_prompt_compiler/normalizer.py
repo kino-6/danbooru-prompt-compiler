@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+import re
+
+TAG_PATTERN = re.compile(r"^[a-z0-9_()]+$")
+BLOCKED_PROSE_TAGS = {
+    "add",
+    "added",
+    "change",
+    "changed",
+    "edit",
+    "edited",
+    "instruction",
+    "subtle",
+    "remix",
+    "composition",
+}
+
 
 def normalize_tags(raw_tags: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -7,7 +23,12 @@ def normalize_tags(raw_tags: list[str]) -> list[str]:
 
     for tag in raw_tags:
         cleaned = tag.strip().lower().replace(" ", "_")
-        if not cleaned or cleaned in seen:
+        if (
+            not cleaned
+            or cleaned in seen
+            or cleaned in BLOCKED_PROSE_TAGS
+            or not TAG_PATTERN.fullmatch(cleaned)
+        ):
             continue
         seen.add(cleaned)
         normalized.append(cleaned)

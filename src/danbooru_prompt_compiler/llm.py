@@ -12,7 +12,7 @@ class LLMClient(ABC):
 
 
 class OllamaClient(LLMClient):
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3") -> None:
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.2") -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
 
