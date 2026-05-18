@@ -1,0 +1,6 @@
+name: comfy_sdxl
+guidance: "SDXL-friendly richer composition and detail tags."
+preferred_tags:
+  - anime_coloring
+  - dramatic_lighting
+  - masterpiece
