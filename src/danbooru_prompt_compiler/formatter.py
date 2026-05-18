@@ -135,7 +135,11 @@ def format_variant(tags: list[str], output_format: OutputFormat = OutputFormat.g
         return ", ".join(tags)
 
     grouped = group_tags(tags)
-    lines = [f"copy: {', '.join(tags)}", ""]
+    lines = [f"copy: {', '.join(tags)}"]
+    copy_lines = _copy_lines(grouped)
+    if copy_lines:
+        lines.extend(["", "copy_lines:", *copy_lines])
+    lines.append("")
     for category in CATEGORY_ORDER:
         category_tags = grouped.get(category, [])
         if category_tags:
@@ -170,3 +174,11 @@ def _category_for_tag(tag: str) -> str:
 
 def _contains_any(tag: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in tag for keyword in keywords)
+
+
+def _copy_lines(grouped: dict[str, list[str]]) -> list[str]:
+    return [
+        ", ".join(grouped[category])
+        for category in CATEGORY_ORDER
+        if grouped.get(category)
+    ]

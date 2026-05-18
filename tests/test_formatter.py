@@ -32,6 +32,11 @@ def test_format_variant_includes_copy_line_and_grouped_sections() -> None:
     assert formatted.splitlines() == [
         "copy: 1girl, shrine, standing",
         "",
+        "copy_lines:",
+        "1girl",
+        "standing",
+        "shrine",
+        "",
         "subject: 1girl",
         "pose: standing",
         "scene: shrine",

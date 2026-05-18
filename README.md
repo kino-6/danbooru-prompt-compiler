@@ -22,7 +22,7 @@ Local-first Python CLI that converts natural-language scene descriptions into or
   - spaces converted to underscores inside tags
   - deduplicate while preserving first-seen order
   - invalid prose-like tokens removed
-- Grouped output with a copy-ready prompt line plus subject, appearance, clothing, pose, scene, style, composition, and other sections.
+- Grouped output with copy-ready prompt lines plus subject, appearance, clothing, pose, scene, style, composition, and other sections.
 - Danbooru tag dictionary warnings for unknown tags.
 - Automatic Danbooru tag dictionary download when `data/tags.json` is missing.
 - YAML presets in `presets/`:
@@ -64,10 +64,16 @@ uv run danbooru-prompt "1girl, solo, shrine, rain, standing" --input-type prompt
 uv run danbooru-prompt "1girl, solo, city, night" --input-type prompt --edit "舞台を雨の神社に変えて、振り返るポーズにする"
 ```
 
-Default output is grouped and includes a copy-ready line:
+Default output is grouped and includes two copy-ready forms:
 
 ```text
 copy: 1girl, solo, shrine, rain, standing, looking_at_viewer, long_hair, night, city
+
+copy_lines:
+1girl, solo
+long_hair
+standing, looking_at_viewer
+shrine, rain, night, city
 
 subject: 1girl, solo
 appearance: long_hair
