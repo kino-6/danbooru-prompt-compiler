@@ -11,8 +11,9 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 TAG_DICT_PATH = BASE_DIR / "data" / "tags.json"
 PRESET_DIR = BASE_DIR / "presets"
 SYSTEM_PROMPT = (
-    "Convert the input into canonical Danbooru-style image tags only. "
-    "Translate non-English scene text into English Danbooru tags. "
+    "You are a Danbooru prompt editor. "
+    "If there is no existing prompt, convert the natural-language instruction into organized Danbooru-style image tags. "
+    "If there is an existing prompt, preserve its useful tags and add only the natural-language instruction changes. "
     "Return comma-separated ASCII tags with lowercase letters, numbers, and underscores. "
     "Do not output Japanese, natural-language nouns, prose, explanations, bullets, or quotes. "
     "Do not include operation words such as add, added, change, changed, edit, subtle, remix, or composition as tags. "
@@ -62,7 +63,7 @@ class PromptCompiler:
         all_variants: list[list[str]] = []
         unknown: list[str] = []
         for output in llm_response.outputs:
-            normalized = normalize_tags(parse_tag_text(output))
+            normalized = normalize_tags(parse_tag_text(output))[: request.max_output_tags]
             all_variants.append(normalized)
             unknown.extend(self._unknown_tags(normalized, known_unknown=unknown))
 
@@ -70,14 +71,17 @@ class PromptCompiler:
 
     def build_prompt(self, request: CompileRequest) -> str:
         source_label = "Existing prompt" if request.input_type == InputType.prompt else "Scene"
+        source_text = f"{source_label}: {request.scene_description}" if request.scene_description else ""
         return "\n".join(
             part
             for part in (
                 SYSTEM_PROMPT,
                 f"Mode: {request.mode.value}.",
                 f"Input type: {request.input_type.value}.",
+                f"Output at most {request.max_output_tags} tags.",
                 self._preset_prompt_text(request.preset_name),
-                f"{source_label}: {request.scene_description}",
+                self._tag_subset_prompt_text(request.tag_subset, max_output_tags=request.max_output_tags),
+                source_text,
                 self._edit_prompt_text(request.edit_instruction),
             )
             if part
@@ -105,6 +109,20 @@ class PromptCompiler:
         return (
             f"Edit instruction: {edit_instruction}\n"
             "Apply the edit while preserving useful existing tags that do not conflict."
+        )
+
+    @staticmethod
+    def _tag_subset_prompt_text(tag_subset: list[str], *, max_output_tags: int) -> str:
+        if not tag_subset:
+            return ""
+
+        return (
+            "Reference tag subset from matching Danbooru posts: "
+            f"{', '.join(tag_subset)}\n"
+            "This subset is a menu, not the output. Do not copy the full subset. "
+            "Use it to improve the prompt with practical, frequently co-occurring Danbooru tags. "
+            "When editing an existing prompt, keep the base prompt and add 3-6 relevant supporting tags from this subset if they fit. "
+            f"Select only the most relevant tags for the input, up to {max_output_tags} tags total."
         )
 
     def _unknown_tags(self, tags: list[str], *, known_unknown: list[str]) -> list[str]:

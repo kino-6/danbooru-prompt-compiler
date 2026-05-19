@@ -11,6 +11,7 @@ Local-first Python CLI that converts natural-language scene descriptions into or
 - LLM client abstraction designed for future LM Studio/OpenAI-compatible clients.
 - Variant generation with `--variants N`.
 - Existing prompt editing with `--input-type prompt --edit`.
+- Danbooru post-based tag subsets for stronger short-input prompting.
 - Compile modes:
   - `subtle`
   - `remix`
@@ -49,7 +50,7 @@ ollama serve
 ollama pull llama3.2
 ```
 
-Create tags from scene text:
+Mode 1: create a prompt from natural-language instruction:
 
 ```bash
 uv run danbooru-prompt "雨の神社で佇む少女"
@@ -57,28 +58,54 @@ uv run danbooru-prompt "深夜の高速道路でナビAIの女の子が不安そ
 uv run danbooru-prompt "空中都市を歩く旅人" --preset sfc_jrpg
 ```
 
-Edit an existing prompt:
+Mode 2: add natural-language changes to an existing prompt:
 
 ```bash
-uv run danbooru-prompt "1girl, solo, shrine, rain, standing" --input-type prompt --edit "夕方にして、赤い傘を追加"
-uv run danbooru-prompt "1girl, solo, city, night" --input-type prompt --edit "舞台を雨の神社に変えて、振り返るポーズにする"
+uv run danbooru-prompt "1girl, solo, shrine, rain, standing" --edit "夕方にして、赤い傘を追加"
 ```
+
+If you do not have a base prompt yet, `--edit` alone also works as a natural-language instruction:
+
+```bash
+uv run danbooru-prompt --edit "雨の神社で佇む少女"
+```
+
+Edits automatically collect temporary reference tags from Danbooru posts unless you pass `--no-auto-subset`. Use `--auto-subset` when you also want post examples to guide mode 1:
+
+```bash
+uv run danbooru-prompt "雨の神社" --auto-subset
+uv run danbooru-prompt "1girl, solo, shrine, rain, standing" --edit "夕方にして、赤い傘を追加"
+```
+
+You can also build and reuse a persistent subset:
+
+```bash
+uv run python scripts/build_tag_subset.py shrine rain --posts 100 --min-count 3 --preview 20 --output data/subsets/shrine_rain.json
+uv run danbooru-prompt "雨の神社" --tag-subset data/subsets/shrine_rain.json
+```
+
+Subset tags are treated as a reference menu, not as output. The CLI estimates useful subset size and output length automatically before asking the LLM.
 
 Default output is grouped and includes two copy-ready forms:
 
 ```text
-copy: 1girl, solo, shrine, rain, standing, looking_at_viewer, long_hair, night, city
-
-copy_lines:
+===
 1girl, solo
 long_hair
 standing, looking_at_viewer
 shrine, rain, night, city
+===
 
 subject: 1girl, solo
 appearance: long_hair
 pose: standing, looking_at_viewer
 scene: shrine, rain, night, city
+```
+
+Copy the `===` prompt block directly to the clipboard:
+
+```bash
+uv run danbooru-prompt "雨の神社で佇む少女" --copy
 ```
 
 Use flat output for the previous single-line style:
@@ -111,11 +138,28 @@ To refresh the dictionary manually:
 uv run python scripts/update_danbooru_tags.py
 ```
 
+To build a smaller, more practical subset from posts that already have seed tags:
+
+```bash
+uv run python scripts/build_tag_subset.py shrine rain --posts 100 --min-count 3 --preview 20 --output data/subsets/shrine_rain.json
+```
+
+Subset files keep counts and frequencies for each tag:
+
+```json
+{
+  "name": "outdoors",
+  "count": 68,
+  "frequency": 0.68
+}
+```
+
 Useful options:
 
 ```bash
 uv run python scripts/update_danbooru_tags.py --limit 50000
 uv run python scripts/update_danbooru_tags.py --output data/tags.json
+uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 --preview 30 --output data/subsets/shrine_rain.json
 ```
 
 ## Tasks
@@ -123,6 +167,7 @@ uv run python scripts/update_danbooru_tags.py --output data/tags.json
 - Expand dictionary filtering options, such as category and minimum post count.
 - Add an optional LLM-assisted organizer for richer semantic grouping.
 - Add stricter dictionary-only output correction for invented tags.
+- Add automatic seed-tag extraction for building subsets directly from short natural-language input.
 
 ## Architecture
 
@@ -132,6 +177,7 @@ uv run python scripts/update_danbooru_tags.py --output data/tags.json
 - `normalizer.py`: parsing and normalization utilities.
 - `formatter.py`: copy-ready and grouped prompt output formatting.
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
+- `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.
 
 This separation keeps the compiler reusable for future integrations (such as a ComfyUI custom node) without coupling to CLI concerns.

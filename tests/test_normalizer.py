@@ -13,6 +13,14 @@ def test_tag_normalization_removes_non_tag_prose() -> None:
         "shrine",
         "added",
         "subtle",
+        "note_that_i_excluded_japanese_characters",
+        "operation_words",
+        "this_output_only_includes_the_requested_tags_and_omits_operation_words",
+        "prose",
+        "explanations",
+        "bullets",
+        "quotes",
+        "if_you_are_looking_for_a_different_type_of_image",
     ]
     assert normalize_tags(raw) == ["1girl", "shrine"]
 

@@ -35,6 +35,17 @@ def test_unknown_tag_warning_data_is_reported() -> None:
     assert result.unknown_tags == ["unknown_custom_tag"]
 
 
+def test_compile_limits_output_tag_count() -> None:
+    client = FakeLLMClient(["1girl, solo, shrine, rain, standing"])
+    compiler = PromptCompiler(llm_client=client, tag_dictionary={"1girl", "solo", "shrine", "rain", "standing"})
+
+    result = compiler.compile(
+        CompileRequest(scene_description="test", variants=1, mode=CompileMode.subtle, max_output_tags=3)
+    )
+
+    assert result.variants == [["1girl", "solo", "shrine"]]
+
+
 def test_prompt_requests_ascii_english_danbooru_tags() -> None:
     client = FakeLLMClient(["1girl, shrine"])
     compiler = PromptCompiler(llm_client=client, tag_dictionary={"1girl", "shrine"})
@@ -45,7 +56,9 @@ def test_prompt_requests_ascii_english_danbooru_tags() -> None:
 
     assert client.last_request is not None
     prompt = client.last_request.prompt
-    assert "Translate non-English scene text into English Danbooru tags" in prompt
+    assert "Danbooru prompt editor" in prompt
+    assert "If there is no existing prompt" in prompt
+    assert "If there is an existing prompt" in prompt
     assert "ASCII tags" in prompt
     assert "Do not output Japanese" in prompt
     assert "Do not include operation words" in prompt
@@ -72,3 +85,25 @@ def test_prompt_edit_request_includes_existing_prompt_and_instruction() -> None:
     assert "Existing prompt: 1girl, solo, shrine, rain" in prompt
     assert "Edit instruction: 夕方にして傘を追加" in prompt
     assert "preserving useful existing tags" in prompt
+
+
+def test_prompt_includes_reference_tag_subset() -> None:
+    client = FakeLLMClient(["1girl, shrine, torii"])
+    compiler = PromptCompiler(llm_client=client, tag_dictionary={"1girl", "shrine", "torii"})
+
+    compiler.compile(
+        CompileRequest(
+            scene_description="神社",
+            variants=1,
+            mode=CompileMode.subtle,
+            tag_subset=["torii", "wide_shot", "stone_lantern"],
+        )
+    )
+
+    assert client.last_request is not None
+    prompt = client.last_request.prompt
+    assert "Reference tag subset from matching Danbooru posts" in prompt
+    assert "torii, wide_shot, stone_lantern" in prompt
+    assert "Do not copy the full subset" in prompt
+    assert "Select only the most relevant tags" in prompt
+    assert "up to 20 tags total" in prompt

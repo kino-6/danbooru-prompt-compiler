@@ -135,16 +135,22 @@ def format_variant(tags: list[str], output_format: OutputFormat = OutputFormat.g
         return ", ".join(tags)
 
     grouped = group_tags(tags)
-    lines = [f"copy: {', '.join(tags)}"]
     copy_lines = _copy_lines(grouped)
+    lines: list[str] = []
     if copy_lines:
-        lines.extend(["", "copy_lines:", *copy_lines])
+        lines.extend(["===", *copy_lines, "==="])
     lines.append("")
     for category in CATEGORY_ORDER:
         category_tags = grouped.get(category, [])
         if category_tags:
             lines.append(f"{category}: {', '.join(category_tags)}")
     return "\n".join(lines)
+
+
+def format_clipboard_text(tags: list[str], output_format: OutputFormat = OutputFormat.grouped) -> str:
+    if output_format == OutputFormat.flat:
+        return ", ".join(tags)
+    return "\n".join(_copy_lines(group_tags(tags)))
 
 
 def group_tags(tags: Iterable[str]) -> dict[str, list[str]]:

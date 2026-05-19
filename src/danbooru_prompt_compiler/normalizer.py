@@ -14,7 +14,21 @@ BLOCKED_PROSE_TAGS = {
     "subtle",
     "remix",
     "composition",
+    "operation_words",
 }
+BLOCKED_PROSE_PREFIXES = (
+    "note_",
+    "here_",
+    "these_",
+    "the_",
+    "this_",
+    "if_",
+    "output_",
+    "prose",
+    "explanations",
+    "bullets",
+    "quotes",
+)
 
 
 def normalize_tags(raw_tags: list[str]) -> list[str]:
@@ -27,6 +41,7 @@ def normalize_tags(raw_tags: list[str]) -> list[str]:
             not cleaned
             or cleaned in seen
             or cleaned in BLOCKED_PROSE_TAGS
+            or cleaned.startswith(BLOCKED_PROSE_PREFIXES)
             or not TAG_PATTERN.fullmatch(cleaned)
         ):
             continue

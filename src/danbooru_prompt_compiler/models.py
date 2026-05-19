@@ -27,12 +27,14 @@ class InputType(str, Enum):
 
 
 class CompileRequest(BaseModel):
-    scene_description: str = Field(min_length=1)
+    scene_description: str = ""
     variants: int = Field(default=1, ge=1, le=10)
     mode: CompileMode = CompileMode.subtle
     preset_name: str | None = None
     input_type: InputType = InputType.scene
     edit_instruction: str | None = None
+    tag_subset: list[str] = Field(default_factory=list)
+    max_output_tags: int = Field(default=20, ge=1, le=100)
 
 
 class CompileResult(BaseModel):
