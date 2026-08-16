@@ -48,6 +48,25 @@ uv run danbooru-prompt --image path/to/image.png --general-threshold 0.4 --chara
 
 The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-tagger-v3). It runs locally through ONNX Runtime; the roughly 379 MB model is downloaded to the Hugging Face cache on first use. General and character tags use separate default thresholds of `0.35` and `0.85`, and output keeps canonical Danbooru underscores.
 
+## Web UI Prototype
+
+Install the optional Web UI dependency and pull the lightweight instruction router and prompt model:
+
+```bash
+uv sync --extra web --group test
+ollama pull qwen3:1.7b
+```
+
+Launch the local workbench:
+
+```bash
+uv run danbooru-prompt-web
+```
+
+Open `http://127.0.0.1:7860` if the browser does not open automatically. Uploading an image and entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
+
+The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes the current image, then the text model proposes the next prompt while preserving requested elements. It does not yet inspect spatial relationships with a vision-language model.
+
 Create a prompt from a natural-language instruction:
 
 ```bash
@@ -211,6 +230,9 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `compiler.py`: core reusable compiler logic (independent from CLI layer).
 - `cli.py`: Typer command interface.
 - `image_tagger.py`: local ONNX image-to-Danbooru-tag inference.
+- `web_router.py`: constrained natural-language instruction routing with a rule fallback.
+- `web_service.py`: orchestration shared by the Web UI and tests.
+- `webui.py`: local Gradio workbench.
 - `llm.py`: provider abstraction (`LLMClient`) + `OllamaClient` implementation.
 - `normalizer.py`: parsing and normalization utilities.
 - `formatter.py`: copy-ready and grouped prompt output formatting.
