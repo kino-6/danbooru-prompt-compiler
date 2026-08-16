@@ -9,10 +9,11 @@ import httpx
 import typer
 
 from .compiler import PromptCompiler
-from .formatter import OutputFormat, format_clipboard_text, format_variant
+from .formatter import OutputFormat, format_clipboard_text, format_suggestion, format_variant
 from .llm import OllamaClient
 from .models import CompileMode, CompileRequest, InputType
 from .reference_tags import load_reference_tags
+from .suggestions import suggest_edit_instructions
 
 app = typer.Typer(help="Compile scene descriptions into Danbooru-style tags.")
 
@@ -43,6 +44,13 @@ def main(
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url"),
     output_format: OutputFormat = typer.Option(OutputFormat.grouped, "--format"),
     copy: bool = typer.Option(False, "--copy", help="Copy the prompt block to the clipboard."),
+    suggest: int = typer.Option(0, "--suggest", min=0, max=10, help="Suggest edit ideas and prompt previews."),
+    ollama_timeout: float = typer.Option(
+        300.0,
+        "--ollama-timeout",
+        min=1.0,
+        help="Seconds to wait for each Ollama generation request.",
+    ),
 ) -> None:
     _configure_stdio()
 
@@ -60,8 +68,9 @@ def main(
         )
         raise typer.Exit(code=1)
 
+    llm_client = OllamaClient(base_url=ollama_url, model=model, timeout=ollama_timeout)
     try:
-        compiler = PromptCompiler.from_files(OllamaClient(base_url=ollama_url, model=model))
+        compiler = PromptCompiler.from_files(llm_client)
         use_auto_subset = auto_subset or bool(edit and not no_auto_subset and not tag_subset and not subset_tags)
         reference_tags = load_reference_tags(
             tag_subset=tag_subset,
@@ -114,6 +123,8 @@ def main(
         )
         raise typer.Exit(code=1) from exc
 
+    unknown_tags = list(result.unknown_tags)
+
     for idx, variant in enumerate(result.variants, start=1):
         if len(result.variants) > 1:
             typer.echo(f"[variant {idx}]")
@@ -126,9 +137,40 @@ def main(
             else:
                 typer.secho("Warning: nothing to copy.", fg=typer.colors.YELLOW, err=True)
 
-    if result.unknown_tags:
+    if suggest and result.variants:
+        suggestions = suggest_edit_instructions(
+            llm_client,
+            base_prompt=scene_description,
+            edit_instruction=edit,
+            current_tags=result.variants[0],
+            reference_tags=reference_tags.tags,
+            count=suggest,
+        )
+        if suggestions:
+            typer.echo("")
+            base_prompt = ", ".join(result.variants[0])
+            for suggestion_index, instruction in enumerate(suggestions, start=1):
+                suggestion_result = compiler.compile(
+                    CompileRequest(
+                        scene_description=base_prompt,
+                        variants=1,
+                        mode=mode,
+                        preset_name=preset,
+                        input_type=InputType.prompt,
+                        edit_instruction=instruction,
+                        tag_subset=reference_tags.tags,
+                        max_output_tags=max_output_tags,
+                    )
+                )
+                _extend_unique(unknown_tags, suggestion_result.unknown_tags)
+                if suggestion_result.variants:
+                    typer.echo(format_suggestion(suggestion_index, instruction, suggestion_result.variants[0], output_format))
+                    if suggestion_index < len(suggestions):
+                        typer.echo("")
+
+    if unknown_tags:
         typer.secho(
-            f"Warning: unknown tags (not in tag dictionary): {', '.join(result.unknown_tags)}",
+            f"Warning: unknown tags (not in tag dictionary): {', '.join(unknown_tags)}",
             fg=typer.colors.YELLOW,
             err=True,
         )
@@ -146,6 +188,12 @@ def _copy_to_clipboard(text: str) -> None:
         return
 
     raise ValueError("--copy is currently supported on Windows only.")
+
+
+def _extend_unique(values: list[str], new_values: list[str]) -> None:
+    for value in new_values:
+        if value not in values:
+            values.append(value)
 
 
 def _read_input_value(input_value: str | None) -> str:

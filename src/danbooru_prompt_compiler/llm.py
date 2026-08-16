@@ -12,15 +12,21 @@ class LLMClient(ABC):
 
 
 class OllamaClient(LLMClient):
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.2") -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "llama3.2",
+        timeout: float = 300.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.timeout = timeout
 
     def generate(self, request: LLMRequest) -> LLMResponse:
         outputs: list[str] = []
         import httpx
 
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=self.timeout) as client:
             for _ in range(request.variants):
                 response = client.post(
                     f"{self.base_url}/api/generate",
