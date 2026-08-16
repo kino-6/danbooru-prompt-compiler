@@ -79,6 +79,7 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 
 - [x] Cover local upload and URL input through the named Gradio API.
 - [x] Add a browser E2E scenario for replacing an already loaded image by drop.
+- [x] Keep the visible drop target mounted by moving the active file to hidden state and resetting the drop component after every upload.
 - [x] Make browser coverage runnable in CI without changing the default unit-test command.
 
 ### Gate

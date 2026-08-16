@@ -6,6 +6,7 @@ import pytest
 gradio = pytest.importorskip("gradio")
 
 from danbooru_prompt_compiler.webui import (  # noqa: E402
+    accept_dropped_image,
     adopt_candidate,
     build_app,
     prepend_history,
@@ -30,6 +31,16 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert action_values == {"auto", "tag_image", "compile", "edit", "next_panel"}
     assert components["ポーズ・位置関係の解析にVLMを使う"]["props"]["value"] is False
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
+    assert "選択中画像" in components
+
+
+def test_drop_acceptance_keeps_active_path_and_resets_drop_zone() -> None:
+    active, preview, name, drop_zone = accept_dropped_image("C:/images/second.png")
+
+    assert active == "C:/images/second.png"
+    assert preview == "C:/images/second.png"
+    assert name == "second.png"
+    assert drop_zone is None
 
 
 def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:

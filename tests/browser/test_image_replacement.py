@@ -31,9 +31,10 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             file_input = page.locator('input[type="file"]').first
 
             file_input.set_input_files(str(first))
-            expect(page.get_by_text("first.png", exact=True)).to_be_visible()
+            selected_name = page.get_by_label("選択中画像")
+            expect(selected_name).to_have_value("first.png")
 
-            file_input.set_input_files(str(second))
-            expect(page.get_by_text("second.png", exact=True)).to_be_visible()
-            expect(page.get_by_text("first.png", exact=True)).not_to_be_visible()
+            page.locator('input[type="file"]').first.set_input_files(str(second))
+            expect(selected_name).to_have_value("second.png")
+            expect(page.locator('input[type="file"]').first).to_be_attached()
             browser.close()

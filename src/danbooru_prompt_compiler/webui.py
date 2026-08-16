@@ -43,6 +43,14 @@ def adopt_candidate(candidate: str | None) -> str:
     return candidate or ""
 
 
+def accept_dropped_image(image_path: str | None):
+    if not image_path:
+        return None, None, "", None
+    from pathlib import Path
+
+    return image_path, image_path, Path(image_path).name, None
+
+
 def preview_image_url(image_url: str, allow_private_hosts: bool):
     return load_image_url_preview(
         (image_url or "").strip(),
@@ -158,12 +166,22 @@ def build_app(*, service: WebPromptService | None = None):
         )
         with gr.Row():
             with gr.Column():
-                image_input = gr.File(
+                image_drop_input = gr.File(
                     file_count="single",
                     file_types=["image"],
                     type="filepath",
-                    label="画像をドロップ（再ドロップで置換）",
+                    label="画像をドロップ（常にここから置換できます）",
                     height=120,
+                )
+                active_image_input = gr.File(
+                    file_count="single",
+                    file_types=["image"],
+                    type="filepath",
+                    visible="hidden",
+                )
+                selected_image_name = gr.Textbox(
+                    label="選択中画像",
+                    interactive=False,
                 )
                 image_preview = gr.Image(
                     label="現在の画像",
@@ -266,7 +284,7 @@ def build_app(*, service: WebPromptService | None = None):
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
 
         inputs = [
-            image_input,
+            active_image_input,
             image_url_input,
             instruction_input,
             base_prompt_input,
@@ -300,10 +318,15 @@ def build_app(*, service: WebPromptService | None = None):
             api_name="run_prompt_workbench",
             concurrency_limit=1,
         )
-        image_input.change(
-            lambda path: path,
-            inputs=image_input,
-            outputs=image_preview,
+        image_drop_input.upload(
+            accept_dropped_image,
+            inputs=image_drop_input,
+            outputs=[
+                active_image_input,
+                image_preview,
+                selected_image_name,
+                image_drop_input,
+            ],
             queue=False,
         )
         image_url_preview_button.click(
