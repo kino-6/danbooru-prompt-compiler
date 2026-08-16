@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from .models import LLMRequest, LLMResponse
 
@@ -49,6 +51,11 @@ class OllamaClient(LLMClient):
                     payload["format"] = "json"
                 if self.think is not None:
                     payload["think"] = self.think
+                if request.image_paths:
+                    payload["images"] = [
+                        base64.b64encode(Path(path).read_bytes()).decode("ascii")
+                        for path in request.image_paths
+                    ]
                 response = client.post(
                     f"{self.base_url}/api/generate",
                     json=payload,

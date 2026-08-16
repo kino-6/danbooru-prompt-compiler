@@ -28,7 +28,7 @@ class FakeHTTPClient:
         return FakeResponse()
 
 
-def test_ollama_client_uses_configured_timeout(monkeypatch) -> None:
+def test_ollama_client_uses_configured_timeout(monkeypatch, tmp_path) -> None:
     import httpx
 
     monkeypatch.setattr(httpx, "Client", FakeHTTPClient)
@@ -40,7 +40,11 @@ def test_ollama_client_uses_configured_timeout(monkeypatch) -> None:
         json_schema=schema,
         think=False,
     )
-    response = client.generate(LLMRequest(prompt="test", variants=1))
+    image_path = tmp_path / "image.bin"
+    image_path.write_bytes(b"image bytes")
+    response = client.generate(
+        LLMRequest(prompt="test", variants=1, image_paths=[str(image_path)])
+    )
 
     assert response.outputs == ["1girl, solo"]
     assert FakeHTTPClient.seen_timeout == 600.0
@@ -48,3 +52,4 @@ def test_ollama_client_uses_configured_timeout(monkeypatch) -> None:
     assert FakeHTTPClient.seen_json["options"] == {"temperature": 0.0}
     assert FakeHTTPClient.seen_json["format"] == schema
     assert FakeHTTPClient.seen_json["think"] is False
+    assert FakeHTTPClient.seen_json["images"] == ["aW1hZ2UgYnl0ZXM="]
