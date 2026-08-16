@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typer
 
+from .image_source import resolve_image_source
 from .web_service import DEFAULT_COMPILER_MODEL, DEFAULT_ROUTER_MODEL, WebPromptService
 
 
@@ -18,6 +19,7 @@ def build_app(*, service: WebPromptService | None = None):
 
     def handle_request(
         image_path,
+        image_url,
         instruction,
         base_prompt,
         router_model,
@@ -29,18 +31,19 @@ def build_app(*, service: WebPromptService | None = None):
         variants,
     ):
         try:
-            result = prompt_service.run(
-                image_path=image_path,
-                instruction=instruction,
-                base_prompt=base_prompt,
-                router_model=router_model,
-                compiler_model=compiler_model,
-                ollama_url=ollama_url,
-                general_threshold=general_threshold,
-                character_threshold=character_threshold,
-                max_image_tags=int(max_image_tags),
-                variants=int(variants),
-            )
+            with resolve_image_source(image_path, image_url) as resolved_image_path:
+                result = prompt_service.run(
+                    image_path=resolved_image_path,
+                    instruction=instruction,
+                    base_prompt=base_prompt,
+                    router_model=router_model,
+                    compiler_model=compiler_model,
+                    ollama_url=ollama_url,
+                    general_threshold=general_threshold,
+                    character_threshold=character_threshold,
+                    max_image_tags=int(max_image_tags),
+                    variants=int(variants),
+                )
             return result.action_plan, result.inferred_tags, result.output, result.status
         except Exception as exc:
             return {}, "", "", f"Error: {exc}"
@@ -51,7 +54,23 @@ def build_app(*, service: WebPromptService | None = None):
             "画像と日本語の指示を渡すと、軽量LLMが操作を分解して既存機能を呼び出します。"
         )
         with gr.Row():
-            image_input = gr.Image(type="filepath", label="現在の画像", height=420)
+            with gr.Column():
+                image_input = gr.File(
+                    file_count="single",
+                    file_types=["image"],
+                    type="filepath",
+                    label="画像をドロップ（再ドロップで置換）",
+                    height=120,
+                )
+                image_preview = gr.Image(
+                    label="現在の画像",
+                    height=300,
+                    interactive=False,
+                )
+                image_url_input = gr.Textbox(
+                    label="画像URL（アップロードなしの場合）",
+                    placeholder="https://example.com/image.png",
+                )
             with gr.Column():
                 instruction_input = gr.Textbox(
                     label="どうしたい？",
@@ -107,6 +126,7 @@ def build_app(*, service: WebPromptService | None = None):
 
         inputs = [
             image_input,
+            image_url_input,
             instruction_input,
             base_prompt_input,
             router_model_input,
@@ -129,6 +149,12 @@ def build_app(*, service: WebPromptService | None = None):
             outputs=outputs,
             api_name="run_prompt_workbench",
             concurrency_limit=1,
+        )
+        image_input.change(
+            lambda path: path,
+            inputs=image_input,
+            outputs=image_preview,
+            queue=False,
         )
         instruction_input.submit(
             handle_request,
