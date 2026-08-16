@@ -1,0 +1,100 @@
+# Web UI Improvement Tasks
+
+Tasks are executed in order. A task is complete only when every Gate is checked.
+
+## Task 1 — Cache image-tagging runtime and results
+
+- [x] Keep the WD Tagger ONNX session and label metadata alive across requests.
+- [x] Cache inferred tags by image content and tagging parameters with a bounded cache.
+- [x] Show whether the image-tag result was a cache hit or miss.
+
+### Gate
+
+- [x] Unit test proves one `ImageTagger` instance initializes its runtime once.
+- [x] Unit test proves an unchanged image and settings call the tagger once across repeated runs.
+- [x] The full test suite passes (55 passed).
+
+## Task 2 — Add human correction and action override controls
+
+- [x] Make inferred tags editable and reuse the edited tags on the next execution.
+- [x] Add an `auto / tag_image / compile / edit / next_panel` action selector.
+- [x] Mark manually overridden execution plans as `manual`.
+
+### Gate
+
+- [x] Unit tests prove edited tags become the compiler input.
+- [x] Unit tests prove each valid manual action bypasses the router decision.
+- [x] Gradio configuration exposes editable tags and the action selector.
+
+## Task 3 — Add optional VLM analysis for spatial requests
+
+- [x] Extend the Ollama request path to attach local images.
+- [x] Add an optional VLM model setting, disabled by default.
+- [x] Use VLM observations only for image edits and next-panel requests.
+
+### Gate
+
+- [x] Unit test proves Ollama receives a base64 image payload.
+- [x] Unit tests prove VLM is skipped for tagging/new compilation and when disabled.
+- [x] Unit test proves VLM observations are included in the edit compiler request.
+
+## Task 4 — Add progress and cancellation
+
+- [x] Report routing, tagging, vision, compilation, and completion phases.
+- [x] Add a cancel button wired to active Gradio events.
+- [x] Keep queue concurrency at one to avoid local model contention.
+
+### Gate
+
+- [x] Unit test proves ordered progress phases are emitted.
+- [x] Gradio configuration contains a cancellation event for both click and submit runs.
+- [x] Existing API execution still completes successfully.
+
+## Task 5 — Add candidate selection and session history
+
+- [x] Expose generated variants as selectable candidates.
+- [x] Add an adopt action that copies the selected candidate into the base prompt.
+- [x] Keep a bounded per-session history of recent executions.
+
+### Gate
+
+- [x] Unit tests prove candidate rendering preserves variant boundaries.
+- [x] Unit test proves history is newest-first and bounded.
+- [x] Gradio configuration exposes candidate, adopt, and history controls.
+
+## Task 6 — Harden and improve URL input
+
+- [x] Add a URL preview action.
+- [x] Reject loopback/private/link-local destinations unless explicitly allowed.
+- [x] Validate redirect destinations as well as the original URL.
+- [x] Keep size, content-type, image-data, and temporary-file checks.
+
+### Gate
+
+- [x] Unit tests cover private hosts, redirect hosts, invalid content, limits, and cleanup.
+- [x] URL preview returns displayable image data without leaving a temporary file.
+- [x] Uploaded files continue to take precedence over URLs.
+
+## Task 7 — Add automated Web UI regression coverage
+
+- [x] Cover local upload and URL input through the named Gradio API.
+- [x] Add a browser E2E scenario for replacing an already loaded image by drop.
+- [x] Make browser coverage runnable in CI without changing the default unit-test command.
+
+### Gate
+
+- [x] API E2E passes for upload replacement inputs and URL input.
+- [ ] Browser test asserts that the second dropped image becomes the active preview/input.
+- [ ] CI configuration installs the required browser before the browser test.
+
+## Task 8 — Add Ollama diagnostics and actionable errors
+
+- [x] Add a connection/model check in the advanced settings.
+- [x] Explain how to start Ollama when it is unreachable.
+- [x] Explain the exact `ollama pull` command when a configured model is missing.
+
+### Gate
+
+- [x] Unit tests cover healthy, unreachable, and missing-model states.
+- [x] UI exposes diagnostics without starting prompt generation.
+- [x] The full test suite and compile check pass with a clean diff check (78 passed, 1 browser-only skip).
