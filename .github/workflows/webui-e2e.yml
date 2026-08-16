@@ -1,0 +1,24 @@
+name: Web UI E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  webui-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python and dependencies
+        run: uv sync --python 3.11 --extra web --group test --group web-test
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Run API E2E
+        run: uv run pytest tests/web -q
+      - name: Run browser E2E
+        env:
+          RUN_BROWSER_E2E: "1"
+        run: uv run pytest tests/browser -q
