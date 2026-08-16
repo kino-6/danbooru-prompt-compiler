@@ -85,8 +85,8 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 ### Gate
 
 - [x] API E2E passes for upload replacement inputs and URL input.
-- [ ] Browser test asserts that the second dropped image becomes the active preview/input.
-- [ ] CI configuration installs the required browser before the browser test.
+- [x] Browser test asserts that the second dropped image becomes the active preview/input.
+- [x] CI configuration installs the required browser before the browser test.
 
 ## Task 8 — Add Ollama diagnostics and actionable errors
 
