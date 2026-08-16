@@ -1,8 +1,11 @@
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from danbooru_prompt_compiler import cli
 from danbooru_prompt_compiler.cli import _infer_input_type, _read_input_value
+from danbooru_prompt_compiler.image_tagger import GENERAL_CATEGORY, ImageTagResult, PredictedTag
 from danbooru_prompt_compiler.models import InputType
 from danbooru_prompt_compiler.reference_tags import load_reference_tags
 
@@ -86,3 +89,39 @@ def test_infer_input_type_keeps_empty_edit_as_scene_instruction() -> None:
         )
         == InputType.scene
     )
+
+
+def test_image_mode_outputs_inferred_tags_without_ollama(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"test placeholder")
+
+    class StubImageTagger:
+        def __init__(self, model_repo: str) -> None:
+            assert model_repo == "test/model"
+
+        def predict(self, path: Path, **options) -> ImageTagResult:
+            assert path == image_path
+            assert options["general_threshold"] == 0.4
+            return ImageTagResult(
+                tags=[PredictedTag("1girl", 0.99, GENERAL_CATEGORY)],
+                rating=None,
+            )
+
+    monkeypatch.setattr(cli, "ImageTagger", StubImageTagger)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "--image",
+            str(image_path),
+            "--tagger-model",
+            "test/model",
+            "--general-threshold",
+            "0.4",
+            "--format",
+            "flat",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "1girl"

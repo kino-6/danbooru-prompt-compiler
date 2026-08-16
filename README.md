@@ -25,7 +25,7 @@ This project uses [uv](https://docs.astral.sh/uv/) for local setup and command e
 uv sync --group test
 ```
 
-Start Ollama first and make sure the selected model is available:
+For natural-language compilation, start Ollama and make sure the selected model is available. Image tagging does not use Ollama.
 
 ```bash
 ollama serve
@@ -33,6 +33,20 @@ ollama pull llama3.2
 ```
 
 ## Quick Start
+
+Infer Danbooru tags directly from an image (the ONNX model is downloaded and cached on first use):
+
+```bash
+uv run danbooru-prompt --image path/to/image.png
+```
+
+Tune confidence thresholds or show the scores when needed:
+
+```bash
+uv run danbooru-prompt --image path/to/image.png --general-threshold 0.4 --character-threshold 0.85 --show-scores
+```
+
+The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-tagger-v3). It runs locally through ONNX Runtime; the roughly 379 MB model is downloaded to the Hugging Face cache on first use. General and character tags use separate default thresholds of `0.35` and `0.85`, and output keeps canonical Danbooru underscores.
 
 Create a prompt from a natural-language instruction:
 
@@ -196,6 +210,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 
 - `compiler.py`: core reusable compiler logic (independent from CLI layer).
 - `cli.py`: Typer command interface.
+- `image_tagger.py`: local ONNX image-to-Danbooru-tag inference.
 - `llm.py`: provider abstraction (`LLMClient`) + `OllamaClient` implementation.
 - `normalizer.py`: parsing and normalization utilities.
 - `formatter.py`: copy-ready and grouped prompt output formatting.
