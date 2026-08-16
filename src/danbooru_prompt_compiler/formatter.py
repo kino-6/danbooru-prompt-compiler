@@ -147,6 +147,19 @@ def format_variant(tags: list[str], output_format: OutputFormat = OutputFormat.g
     return "\n".join(lines)
 
 
+def format_suggestion(
+    index: int,
+    instruction: str,
+    tags: list[str],
+    output_format: OutputFormat = OutputFormat.grouped,
+) -> str:
+    lines = [f"=== suggestion {index} ===", f"edit: {instruction}"]
+    formatted = format_variant(tags, output_format)
+    if formatted:
+        lines.append(formatted)
+    return "\n".join(lines)
+
+
 def format_clipboard_text(tags: list[str], output_format: OutputFormat = OutputFormat.grouped) -> str:
     if output_format == OutputFormat.flat:
         return ", ".join(tags)

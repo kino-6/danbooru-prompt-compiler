@@ -9,10 +9,17 @@ import httpx
 import typer
 
 from .compiler import PromptCompiler
-from .formatter import OutputFormat, format_clipboard_text, format_variant
+from .formatter import OutputFormat, format_clipboard_text, format_suggestion, format_variant
+from .image_tagger import (
+    DEFAULT_CHARACTER_THRESHOLD,
+    DEFAULT_GENERAL_THRESHOLD,
+    DEFAULT_TAGGER_MODEL,
+    ImageTagger,
+)
 from .llm import OllamaClient
 from .models import CompileMode, CompileRequest, InputType
 from .reference_tags import load_reference_tags
+from .suggestions import suggest_edit_instructions
 
 app = typer.Typer(help="Compile scene descriptions into Danbooru-style tags.")
 
@@ -26,6 +33,29 @@ def _configure_stdio() -> None:
 @app.command()
 def main(
     input_value: str | None = typer.Argument(None, help="Base prompt, scene text, or path to a text file."),
+    image: Path | None = typer.Option(
+        None,
+        "--image",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Infer Danbooru tags directly from an image.",
+    ),
+    tagger_model: str = typer.Option(DEFAULT_TAGGER_MODEL, "--tagger-model"),
+    general_threshold: float = typer.Option(
+        DEFAULT_GENERAL_THRESHOLD,
+        "--general-threshold",
+        min=0.0,
+        max=1.0,
+    ),
+    character_threshold: float = typer.Option(
+        DEFAULT_CHARACTER_THRESHOLD,
+        "--character-threshold",
+        min=0.0,
+        max=1.0,
+    ),
+    image_max_tags: int = typer.Option(50, "--image-max-tags", min=1, max=500),
+    show_scores: bool = typer.Option(False, "--show-scores", help="Show confidence scores for image tags."),
     variants: int = typer.Option(1, "--variants", min=1, max=10),
     mode: CompileMode = typer.Option(CompileMode.subtle, "--mode"),
     preset: str | None = typer.Option(None, "--preset"),
@@ -43,8 +73,59 @@ def main(
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url"),
     output_format: OutputFormat = typer.Option(OutputFormat.grouped, "--format"),
     copy: bool = typer.Option(False, "--copy", help="Copy the prompt block to the clipboard."),
+    suggest: int = typer.Option(0, "--suggest", min=0, max=10, help="Suggest edit ideas and prompt previews."),
+    ollama_timeout: float = typer.Option(
+        300.0,
+        "--ollama-timeout",
+        min=1.0,
+        help="Seconds to wait for each Ollama generation request.",
+    ),
 ) -> None:
     _configure_stdio()
+
+    if image is not None:
+        if input_value or edit:
+            typer.secho(
+                "Error: --image cannot be combined with a text input or --edit.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        try:
+            prediction = ImageTagger(tagger_model).predict(
+                image,
+                general_threshold=general_threshold,
+                character_threshold=character_threshold,
+                max_tags=image_max_tags,
+            )
+        except (httpx.HTTPError, OSError, RuntimeError, ValueError) as exc:
+            typer.secho(
+                f"Error: failed to infer image tags: {exc}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+
+        typer.echo(format_variant(prediction.names, output_format))
+        if not prediction.tags:
+            typer.secho(
+                "Warning: no tags exceeded the selected confidence thresholds.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        if show_scores:
+            typer.echo("")
+            typer.echo("confidence:")
+            for tag in prediction.tags:
+                typer.echo(f"{tag.score:.3f}\t{tag.name}")
+            if prediction.rating is not None:
+                typer.echo(f"rating\t{prediction.rating.name} ({prediction.rating.score:.3f})")
+        if copy:
+            clipboard_text = format_clipboard_text(prediction.names, output_format)
+            if clipboard_text:
+                _copy_to_clipboard(clipboard_text)
+                typer.secho("Copied inferred tags to clipboard.", fg=typer.colors.GREEN, err=True)
+        return
 
     scene_description = _read_input_value(input_value)
     effective_input_type = _infer_input_type(
@@ -60,8 +141,9 @@ def main(
         )
         raise typer.Exit(code=1)
 
+    llm_client = OllamaClient(base_url=ollama_url, model=model, timeout=ollama_timeout)
     try:
-        compiler = PromptCompiler.from_files(OllamaClient(base_url=ollama_url, model=model))
+        compiler = PromptCompiler.from_files(llm_client)
         use_auto_subset = auto_subset or bool(edit and not no_auto_subset and not tag_subset and not subset_tags)
         reference_tags = load_reference_tags(
             tag_subset=tag_subset,
@@ -114,6 +196,8 @@ def main(
         )
         raise typer.Exit(code=1) from exc
 
+    unknown_tags = list(result.unknown_tags)
+
     for idx, variant in enumerate(result.variants, start=1):
         if len(result.variants) > 1:
             typer.echo(f"[variant {idx}]")
@@ -126,9 +210,40 @@ def main(
             else:
                 typer.secho("Warning: nothing to copy.", fg=typer.colors.YELLOW, err=True)
 
-    if result.unknown_tags:
+    if suggest and result.variants:
+        suggestions = suggest_edit_instructions(
+            llm_client,
+            base_prompt=scene_description,
+            edit_instruction=edit,
+            current_tags=result.variants[0],
+            reference_tags=reference_tags.tags,
+            count=suggest,
+        )
+        if suggestions:
+            typer.echo("")
+            base_prompt = ", ".join(result.variants[0])
+            for suggestion_index, instruction in enumerate(suggestions, start=1):
+                suggestion_result = compiler.compile(
+                    CompileRequest(
+                        scene_description=base_prompt,
+                        variants=1,
+                        mode=mode,
+                        preset_name=preset,
+                        input_type=InputType.prompt,
+                        edit_instruction=instruction,
+                        tag_subset=reference_tags.tags,
+                        max_output_tags=max_output_tags,
+                    )
+                )
+                _extend_unique(unknown_tags, suggestion_result.unknown_tags)
+                if suggestion_result.variants:
+                    typer.echo(format_suggestion(suggestion_index, instruction, suggestion_result.variants[0], output_format))
+                    if suggestion_index < len(suggestions):
+                        typer.echo("")
+
+    if unknown_tags:
         typer.secho(
-            f"Warning: unknown tags (not in tag dictionary): {', '.join(result.unknown_tags)}",
+            f"Warning: unknown tags (not in tag dictionary): {', '.join(unknown_tags)}",
             fg=typer.colors.YELLOW,
             err=True,
         )
@@ -146,6 +261,12 @@ def _copy_to_clipboard(text: str) -> None:
         return
 
     raise ValueError("--copy is currently supported on Windows only.")
+
+
+def _extend_unique(values: list[str], new_values: list[str]) -> None:
+    for value in new_values:
+        if value not in values:
+            values.append(value)
 
 
 def _read_input_value(input_value: str | None) -> str:

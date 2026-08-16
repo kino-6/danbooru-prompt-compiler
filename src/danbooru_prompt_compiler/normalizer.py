@@ -3,6 +3,12 @@ from __future__ import annotations
 import re
 
 TAG_PATTERN = re.compile(r"^[a-z0-9_()]+$")
+TAG_ALIASES = {
+    "single_girl": "1girl",
+    "one_girl": "1girl",
+    "girl_alone": "1girl",
+    "1girl_alone": "1girl",
+}
 BLOCKED_PROSE_TAGS = {
     "add",
     "added",
@@ -23,6 +29,7 @@ BLOCKED_PROSE_PREFIXES = (
     "the_",
     "this_",
     "if_",
+    "based_",
     "output_",
     "prose",
     "explanations",
@@ -37,6 +44,7 @@ def normalize_tags(raw_tags: list[str]) -> list[str]:
 
     for tag in raw_tags:
         cleaned = tag.strip().lower().replace(" ", "_")
+        cleaned = TAG_ALIASES.get(cleaned, cleaned)
         if (
             not cleaned
             or cleaned in seen

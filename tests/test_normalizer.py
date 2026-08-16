@@ -6,6 +6,11 @@ def test_tag_normalization_and_duplicate_removal() -> None:
     assert normalize_tags(raw) == ["1girl", "night_scene", "rain"]
 
 
+def test_tag_normalization_applies_common_aliases() -> None:
+    raw = ["single_girl", "one_girl", "1girl_alone", "shrine"]
+    assert normalize_tags(raw) == ["1girl", "shrine"]
+
+
 def test_tag_normalization_removes_non_tag_prose() -> None:
     raw = [
         "here_is_the_scene_description_converted_into_canonical_danbooru-style_image_tags:",
@@ -16,6 +21,7 @@ def test_tag_normalization_removes_non_tag_prose() -> None:
         "note_that_i_excluded_japanese_characters",
         "operation_words",
         "this_output_only_includes_the_requested_tags_and_omits_operation_words",
+        "based_on_the_input_prompt",
         "prose",
         "explanations",
         "bullets",

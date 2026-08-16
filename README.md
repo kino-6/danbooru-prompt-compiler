@@ -1,37 +1,21 @@
 # danbooru-prompt-compiler
 
-Local-first Python CLI that converts natural-language scene descriptions into organized Danbooru-style positive tags for anime image generation workflows (e.g., ComfyUI).
+Local-first CLI that turns natural-language image ideas into organized Danbooru-style positive prompts.
 
-## Features
+It is built for iterative anime image generation workflows: write a rough idea, edit an existing prompt in Japanese, then pull a few "prompt gacha" suggestions and copy the one that looks promising.
 
-- Python 3.11+ project.
-- Typer-based CLI (`danbooru-prompt`).
-- Pydantic models for strict compile/LLM request structures.
+## Highlights
+
 - Local-first LLM integration using Ollama-compatible API.
-- LLM client abstraction designed for future LM Studio/OpenAI-compatible clients.
-- Variant generation with `--variants N`.
-- Existing prompt editing with `--input-type prompt --edit`.
-- Danbooru post-based tag subsets for stronger short-input prompting.
-- Compile modes:
-  - `subtle`
-  - `remix`
-  - `composition`
-  - `character_safe`
-- Tag normalization:
-  - lowercase
-  - trim whitespace
-  - spaces converted to underscores inside tags
-  - deduplicate while preserving first-seen order
-  - invalid prose-like tokens removed
-- Grouped output with copy-ready prompt lines plus subject, appearance, clothing, pose, scene, style, composition, and other sections.
+- Two core modes:
+  - create a prompt from natural language
+  - preserve a base prompt and apply a natural-language edit
+- Prompt gacha with `--suggest N`: proposes edit ideas and shows converted prompt previews.
+- Danbooru post-based reference tags for stronger short-input prompting.
+- Grouped output with copy-ready `===` blocks plus `subject`, `appearance`, `pose`, `scene`, and other sections.
+- Clipboard copy with `--copy` on Windows.
 - Danbooru tag dictionary warnings for unknown tags.
 - Automatic Danbooru tag dictionary download when `data/tags.json` is missing.
-- YAML presets in `presets/`:
-  - `anime_illust`
-  - `sfc_jrpg`
-  - `comfy_sd15`
-  - `comfy_sdxl`
-- Fallback parser for accidental bullet-list and newline-separated model output.
 
 ## Setup
 
@@ -41,27 +25,100 @@ This project uses [uv](https://docs.astral.sh/uv/) for local setup and command e
 uv sync --group test
 ```
 
-## Usage
-
-Start Ollama first and make sure the selected model is available:
+For natural-language compilation, start Ollama and make sure the selected model is available. Image tagging does not use Ollama.
 
 ```bash
 ollama serve
 ollama pull llama3.2
 ```
 
-Mode 1: create a prompt from natural-language instruction:
+## Quick Start
+
+Infer Danbooru tags directly from an image (the ONNX model is downloaded and cached on first use):
+
+```bash
+uv run danbooru-prompt --image path/to/image.png
+```
+
+Tune confidence thresholds or show the scores when needed:
+
+```bash
+uv run danbooru-prompt --image path/to/image.png --general-threshold 0.4 --character-threshold 0.85 --show-scores
+```
+
+The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-tagger-v3). It runs locally through ONNX Runtime; the roughly 379 MB model is downloaded to the Hugging Face cache on first use. General and character tags use separate default thresholds of `0.35` and `0.85`, and output keeps canonical Danbooru underscores.
+
+Create a prompt from a natural-language instruction:
 
 ```bash
 uv run danbooru-prompt "雨の神社で佇む少女"
-uv run danbooru-prompt "深夜の高速道路でナビAIの女の子が不安そうにこちらを見る" --variants 3 --mode subtle
-uv run danbooru-prompt "空中都市を歩く旅人" --preset sfc_jrpg
 ```
 
-Mode 2: add natural-language changes to an existing prompt:
+Default output is grouped and copy-ready:
+
+```text
+===
+1girl, solo
+long_hair
+standing, looking_at_viewer
+shrine, rain, night
+===
+
+subject: 1girl, solo
+appearance: long_hair
+pose: standing, looking_at_viewer
+scene: shrine, rain, night
+```
+
+Edit an existing prompt without rebuilding it from scratch:
 
 ```bash
 uv run danbooru-prompt "1girl, solo, shrine, rain, standing" --edit "夕方にして、赤い傘を追加"
+```
+
+Use prompt gacha to get three edit ideas and converted prompt previews:
+
+```bash
+uv run danbooru-prompt "1girl, shrine, rain" --suggest 3
+```
+
+Suggestion previews appear below the main prompt:
+
+```text
+=== suggestion 1 ===
+edit: 鳥居の奥に淡い霧を足す
+===
+1girl, solo
+long_hair
+standing, looking_at_viewer
+shrine, rain, torii, mist
+===
+```
+
+Copy the main `===` block directly to the clipboard:
+
+```bash
+uv run danbooru-prompt "雨の神社で佇む少女" --copy
+```
+
+## Common Workflows
+
+Generate multiple variants:
+
+```bash
+uv run danbooru-prompt "深夜の高速道路でナビAIの女の子が不安そうにこちらを見る" --variants 3 --mode subtle
+```
+
+Use a preset:
+
+```bash
+uv run danbooru-prompt "空中都市を歩く旅人" --preset sfc_jrpg
+```
+
+Use flat output for the previous single-line style:
+
+```bash
+uv run danbooru-prompt "a girl in rain" --format flat
 ```
 
 If you do not have a base prompt yet, `--edit` alone also works as a natural-language instruction:
@@ -70,7 +127,23 @@ If you do not have a base prompt yet, `--edit` alone also works as a natural-lan
 uv run danbooru-prompt --edit "雨の神社で佇む少女"
 ```
 
-Edits automatically collect temporary reference tags from Danbooru posts unless you pass `--no-auto-subset`. Use `--auto-subset` when you also want post examples to guide mode 1:
+Optional LLM options:
+
+```bash
+uv run danbooru-prompt "a girl in rain" --model llama3.2 --ollama-url http://localhost:11434
+```
+
+Large models can take longer to load on the first request, especially with `--suggest` because it makes several generation calls. Increase the Ollama request timeout when needed:
+
+```bash
+uv run danbooru-prompt "1girl" --suggest 3 --model huihui_ai/Qwen3.6-abliterated:27b --ollama-timeout 600
+```
+
+You can also pass a path to an existing text file instead of inline scene text.
+
+## Reference Tags
+
+Edits automatically collect temporary reference tags from matching Danbooru posts unless you pass `--no-auto-subset`. Use `--auto-subset` when you also want post examples to guide a new prompt:
 
 ```bash
 uv run danbooru-prompt "雨の神社" --auto-subset
@@ -85,42 +158,6 @@ uv run danbooru-prompt "雨の神社" --tag-subset data/subsets/shrine_rain.json
 ```
 
 Subset tags are treated as a reference menu, not as output. The CLI estimates useful subset size and output length automatically before asking the LLM.
-
-Default output is grouped and includes two copy-ready forms:
-
-```text
-===
-1girl, solo
-long_hair
-standing, looking_at_viewer
-shrine, rain, night, city
-===
-
-subject: 1girl, solo
-appearance: long_hair
-pose: standing, looking_at_viewer
-scene: shrine, rain, night, city
-```
-
-Copy the `===` prompt block directly to the clipboard:
-
-```bash
-uv run danbooru-prompt "雨の神社で佇む少女" --copy
-```
-
-Use flat output for the previous single-line style:
-
-```bash
-uv run danbooru-prompt "a girl in rain" --format flat
-```
-
-Optional LLM options:
-
-```bash
-uv run danbooru-prompt "a girl in rain" --model llama3.2 --ollama-url http://localhost:11434
-```
-
-You can also pass a path to an existing text file instead of inline scene text.
 
 ## Testing
 
@@ -165,17 +202,21 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 ## Tasks
 
 - Expand dictionary filtering options, such as category and minimum post count.
-- Add an optional LLM-assisted organizer for richer semantic grouping.
 - Add stricter dictionary-only output correction for invented tags.
-- Add automatic seed-tag extraction for building subsets directly from short natural-language input.
+- Improve prompt gacha scoring so suggestions prefer high-impact, dictionary-friendly tags.
+- Add richer candidate ideas for more scene types beyond the current common tag mappings.
 
 ## Architecture
 
 - `compiler.py`: core reusable compiler logic (independent from CLI layer).
 - `cli.py`: Typer command interface.
+- `image_tagger.py`: local ONNX image-to-Danbooru-tag inference.
 - `llm.py`: provider abstraction (`LLMClient`) + `OllamaClient` implementation.
 - `normalizer.py`: parsing and normalization utilities.
 - `formatter.py`: copy-ready and grouped prompt output formatting.
+- `suggestions.py`: prompt gacha idea generation and fallback candidate handling.
+- `reference_tags.py`: reference tag loading, auto-subset selection, and max-tag estimation.
+- `seed_tags.py`: seed tag inference for Danbooru post lookup.
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.
