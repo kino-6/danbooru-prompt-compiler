@@ -432,6 +432,7 @@ def build_app(*, service: WebPromptService | None = None):
             return (
                 preview_image_url(image_url, allow_private_hosts),
                 None,
+                (image_url or "").strip(),
                 "",
                 "",
                 *("" for _ in range(MAX_OUTPUT_VARIANTS)),
@@ -458,6 +459,7 @@ def build_app(*, service: WebPromptService | None = None):
         image_url_outputs = [
             image_workspace,
             active_image_input,
+            image_url_input,
             inferred_tags_editor,
             base_prompt_input,
             *prompt_outputs,
