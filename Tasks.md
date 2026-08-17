@@ -99,3 +99,15 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit tests cover healthy, unreachable, and missing-model states.
 - [x] UI exposes diagnostics without starting prompt generation.
 - [x] The full test suite and compile check pass with a clean diff check (78 passed, 1 browser-only skip).
+
+## Task 9 — Make prompt variants individually copyable
+
+- [x] Render each generated variant in its own output textbox.
+- [x] Add a copy button to every variant textbox.
+- [x] Keep variant headers out of the individually copied prompt text.
+
+### Gate
+
+- [x] Unit tests prove variants remain separate and copy text has no variant header.
+- [x] Gradio configuration exposes four independently copyable output boxes.
+- [x] Named Gradio API regression test passes with the expanded outputs.
