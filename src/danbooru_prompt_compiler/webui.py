@@ -61,7 +61,7 @@ IMAGE_URL_DROP_JS = r"""
           document.querySelector("#image-url-accordion button")?.click();
         }
         if (attemptsLeft > 0) {
-          requestAnimationFrame(() => routeUrl(attemptsLeft - 1));
+          setTimeout(() => routeUrl(attemptsLeft - 1), 50);
         }
         return;
       }
@@ -70,7 +70,8 @@ IMAGE_URL_DROP_JS = r"""
         : HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
       field.dispatchEvent(new Event("input", { bubbles: true }));
-      setTimeout(() => button.click(), 0);
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      setTimeout(() => button.click(), 100);
     };
     routeUrl();
   }, true);
