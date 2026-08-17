@@ -36,6 +36,7 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             file_input.set_input_files(str(first))
             expect(page.locator('#image-workspace img[src*="first.png"]')).to_be_visible()
             page.get_by_role("button", name="実行", exact=True).click()
+            page.get_by_text("画像タグの確認・修正", exact=True).click()
             inferred_tags = page.locator("#inferred-tags-editor textarea")
             expect(inferred_tags).to_have_value("1girl, solo")
             page.get_by_text("既存プロンプトから編集（任意）", exact=True).click()

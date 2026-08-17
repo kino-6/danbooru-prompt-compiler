@@ -25,15 +25,19 @@ MAX_HISTORY_ITEMS = 20
 MAX_OUTPUT_VARIANTS = 4
 IMAGE_URL_DROP_JS = r"""
 () => {
-  const zone = document.getElementById("image-workspace");
-  if (!zone || zone.dataset.urlDropReady === "true") return;
-  zone.dataset.urlDropReady = "true";
+  if (document.documentElement.dataset.imageUrlDropReady === "true") return;
+  document.documentElement.dataset.imageUrlDropReady = "true";
 
-  zone.addEventListener("dragover", (event) => {
+  const isImageWorkspace = (event) =>
+    event.target instanceof Element && event.target.closest("#image-workspace");
+
+  document.addEventListener("dragover", (event) => {
+    if (!isImageWorkspace(event)) return;
     const types = Array.from(event.dataTransfer?.types || []);
     if (!types.includes("Files")) event.preventDefault();
-  });
-  zone.addEventListener("drop", (event) => {
+  }, true);
+  document.addEventListener("drop", (event) => {
+    if (!isImageWorkspace(event)) return;
     if (event.dataTransfer?.files?.length) return;
     const uriList = event.dataTransfer?.getData("text/uri-list") || "";
     const plainText = event.dataTransfer?.getData("text/plain") || "";
@@ -47,8 +51,10 @@ IMAGE_URL_DROP_JS = r"""
 
     event.preventDefault();
     event.stopPropagation();
-    const field = document.querySelector("#image-url-input textarea, #image-url-input input");
-    const button = document.querySelector("#image-url-load-button button");
+    const field = document.querySelector(
+      "#dropped-image-url-input textarea, #dropped-image-url-input input"
+    );
+    const button = document.querySelector("#dropped-image-url-button button");
     if (!field || !button) return;
     const prototype = field instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype
@@ -56,7 +62,7 @@ IMAGE_URL_DROP_JS = r"""
     Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
     field.dispatchEvent(new Event("input", { bubbles: true }));
     setTimeout(() => button.click(), 0);
-  });
+  }, true);
 }
 """
 
@@ -224,6 +230,15 @@ def build_app(*, service: WebPromptService | None = None):
                     file_types=["image"],
                     type="filepath",
                     visible="hidden",
+                )
+                dropped_image_url_input = gr.Textbox(
+                    visible="hidden",
+                    elem_id="dropped-image-url-input",
+                )
+                dropped_image_url_button = gr.Button(
+                    "ドロップURLを読み込む",
+                    visible="hidden",
+                    elem_id="dropped-image-url-button",
                 )
                 with gr.Accordion("URLから読み込む（補助）", open=False):
                     image_url_input = gr.Textbox(
@@ -434,19 +449,26 @@ def build_app(*, service: WebPromptService | None = None):
             ],
             queue=False,
         )
+        image_url_outputs = [
+            image_workspace,
+            active_image_input,
+            inferred_tags_editor,
+            base_prompt_input,
+            *prompt_outputs,
+            candidate_selector,
+            action_plan_output,
+            status_output,
+        ]
         image_url_preview_button.click(
             handle_image_url,
             inputs=[image_url_input, allow_private_image_urls_input],
-            outputs=[
-                image_workspace,
-                active_image_input,
-                inferred_tags_editor,
-                base_prompt_input,
-                *prompt_outputs,
-                candidate_selector,
-                action_plan_output,
-                status_output,
-            ],
+            outputs=image_url_outputs,
+            queue=False,
+        )
+        dropped_image_url_button.click(
+            handle_image_url,
+            inputs=[dropped_image_url_input, allow_private_image_urls_input],
+            outputs=image_url_outputs,
             queue=False,
         )
         ollama_diagnostic_button.click(
