@@ -124,3 +124,17 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit and API tests prove three candidates populate output boxes 1–3 independently.
 - [x] Component configuration proves all four boxes are visible, editable, and copy-enabled.
 - [x] Chromium E2E proves three candidates are simultaneously visible, editable, and contain copy-ready text.
+
+## Task 11 — Preserve organized output and expose output count
+
+- [x] Keep category ordering as copy-ready multiline prompt text in every output box.
+- [x] Move output-count selection to the main controls and support 1–4 outputs.
+- [x] Default the Web UI to four outputs.
+- [x] Make the explicit UI count authoritative over the router model response.
+
+### Gate
+
+- [x] Unit tests prove organized multiline output and authoritative count selection.
+- [x] Component configuration exposes output count 1–4 with default 4.
+- [x] Real-service API returns four independent multiline prompts when output count is 4.
+- [ ] Chromium E2E passes with multiline prompt values.
