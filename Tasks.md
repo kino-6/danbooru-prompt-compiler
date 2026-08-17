@@ -184,9 +184,11 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Route a pasted clipboard image into the image workspace from anywhere on the page.
 - [x] Keep text paste in text fields unaffected when the clipboard also carries text.
 - [x] Load a pasted HTTP/HTTPS image URL through the existing URL bridge.
+- [x] Drop the `clipboard` image source so the browser stops asking for clipboard-read permission.
 
 ### Gate
 
 - [x] Unit test proves the paste bridge targets the image workspace file input.
+- [x] Unit test proves the permission-prompting clipboard source stays disabled.
 - [x] Chromium E2E proves a pasted image becomes the active image and produces a run.
 - [x] The full test suite and CI pass (93 passed, 1 browser-only skip; 4 Chromium E2E passed).
