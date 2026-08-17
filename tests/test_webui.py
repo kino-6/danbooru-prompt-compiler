@@ -94,3 +94,4 @@ def test_prompt_candidates_get_independent_copyable_boxes() -> None:
         assert "copy" in props["buttons"]
         assert props["interactive"] is True
         assert props["visible"] is True
+        assert props["elem_id"] == f"prompt-output-{index}"

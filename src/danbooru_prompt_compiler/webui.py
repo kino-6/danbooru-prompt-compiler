@@ -285,6 +285,7 @@ def build_app(*, service: WebPromptService | None = None):
                             lines=5,
                             buttons=["copy"],
                             interactive=True,
+                            elem_id=f"prompt-output-{index + 1}",
                         )
                     )
         with gr.Row():

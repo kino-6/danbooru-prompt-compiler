@@ -58,11 +58,15 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             page.get_by_role("button", name="実行", exact=True).click()
 
             for index, prompt in enumerate(prompts, 1):
-                output = page.get_by_label(f"出力プロンプト {index}")
+                container = page.locator(f"#prompt-output-{index}")
+                output = container.locator("textarea")
                 expect(output).to_be_visible()
                 expect(output).to_be_editable()
                 expect(output).to_have_value(prompt)
+                expect(container.get_by_role("button", name="Copy")).to_be_visible()
 
-            expect(page.get_by_label("出力プロンプト 4")).to_be_visible()
-            expect(page.get_by_label("出力プロンプト 4")).to_have_value("")
+            fourth = page.locator("#prompt-output-4 textarea")
+            expect(fourth).to_be_visible()
+            expect(fourth).to_be_editable()
+            expect(fourth).to_have_value("")
             browser.close()
