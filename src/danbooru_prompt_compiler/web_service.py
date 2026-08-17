@@ -75,10 +75,11 @@ class WebRunRequest(BaseModel):
     character_threshold: float = 0.85
     max_image_tags: int = 50
     variants: int = 4
+    generate_next_panel: bool = True
     edited_tags: str = ""
     edited_description: str = ""
     action_override: str = "auto"
-    use_vision: bool = False
+    use_vision: bool = True
     vision_model: str = DEFAULT_VISION_MODEL
     allow_private_image_urls: bool = False
     apply_tag_exclusions: bool = True
@@ -95,12 +96,18 @@ class WebRunRequest(BaseModel):
         return {
             name: value
             for name, value in self.model_dump().items()
-            if name not in IMAGE_SOURCE_FIELDS
+            if name not in UI_ONLY_FIELDS
         }
 
 
-# Resolved by the Web UI into a single image path before the service runs.
-IMAGE_SOURCE_FIELDS = ("image_path", "image_url", "allow_private_image_urls")
+# Fields the Web UI consumes itself: the image source is resolved to one path
+# before a run, and the next-panel follow-up composes two runs.
+UI_ONLY_FIELDS = (
+    "image_path",
+    "image_url",
+    "allow_private_image_urls",
+    "generate_next_panel",
+)
 WEB_RUN_FIELDS: tuple[str, ...] = tuple(WebRunRequest.model_fields)
 
 
@@ -202,13 +209,19 @@ class WebPromptService:
         # sharpen what the VLM saw and re-run without paying for it again.
         image_description = (edited_description or "").strip()
         description_cache_hit: bool | None = None
+        description_error = ""
         if use_vision and image_path and not image_description:
             _report_progress(on_progress, "vision", 0.4)
-            image_description, description_cache_hit = self._describe_image(
-                image_path,
-                ollama_url=ollama_url,
-                vision_model=vision_model,
-            )
+            try:
+                image_description, description_cache_hit = self._describe_image(
+                    image_path,
+                    ollama_url=ollama_url,
+                    vision_model=vision_model,
+                )
+            except Exception as exc:
+                # The description is an aid, so a missing or broken vision model
+                # must not take the prompt generation down with it.
+                description_error = f"{vision_model}: {exc}"
 
         if routed.plan.action == WebAction.tag_image:
             if not inferred_names:
@@ -224,6 +237,7 @@ class WebPromptService:
                     image_cache_hit=image_cache_hit,
                     excluded_image_tags=excluded_image_tags,
                     description_cache_hit=description_cache_hit,
+                    description_error=description_error,
                 ),
                 candidates=[format_clipboard_text(inferred_names, OutputFormat.grouped)],
                 image_description=image_description,
@@ -284,6 +298,7 @@ class WebPromptService:
             excluded_image_tags=excluded_image_tags,
             excluded_prompt_tags=excluded_prompt_tags,
             description_cache_hit=description_cache_hit,
+            description_error=description_error,
         )
         if compile_result.unknown_tags:
             status += f"\n\nUnknown tags: {', '.join(compile_result.unknown_tags)}"
@@ -591,6 +606,7 @@ def _status_text(
     excluded_image_tags: list[str],
     excluded_prompt_tags: list[str] | None = None,
     description_cache_hit: bool | None = None,
+    description_error: str = "",
 ) -> str:
     lines = [f"Router: {routed.source}", f"Action: {routed.plan.action.value}"]
     if routed.warning:
@@ -602,7 +618,9 @@ def _status_text(
             lines.append(
                 f"Rating estimate: {image_result.rating.name} ({image_result.rating.score:.3f})"
             )
-    if description_cache_hit is not None:
+    if description_error:
+        lines.append(f"Image description failed: {description_error}")
+    elif description_cache_hit is not None:
         lines.append(
             f"Image description: {'cached' if description_cache_hit else 'generated'}"
         )

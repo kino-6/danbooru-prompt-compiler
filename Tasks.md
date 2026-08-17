@@ -333,3 +333,27 @@ covered. The tests passed because they only asserted the three spellings the rul
       component that does.
 - [x] Chromium E2E proves the VLM switch and description are visible without opening a section.
 - [x] The full test suite and CI pass (117 passed, 1 browser-only skip; 5 Chromium E2E passed).
+
+## Task 24 — Produce next panels and the description by default
+
+Both aids were opt-in and easy to miss, and a failing vision model took the whole run
+down while its error stayed inside the folded `実行情報` section.
+
+- [x] Default `VLMで画像を説明する` to on.
+- [x] Default `次のコマも生成する（出力2〜4）` to on: box 1 keeps the current result and
+      boxes 2-4 hold proposals for the moment after it.
+- [x] Continue the follow-up from the tags and description the first run resolved.
+- [x] Keep the primary result when the vision model or the follow-up fails, and say why.
+- [x] Move the status line out of the folded section so failures are visible.
+- [x] Leave the `次のコマ` button filling all four boxes, with no duplicate follow-up.
+
+### Gate
+
+- [x] Unit test proves boxes 2-4 hold the panels and that the follow-up reuses the
+      resolved tags and description.
+- [x] Unit tests prove a failed follow-up, a failed vision model, and an explicit
+      next-panel run each behave correctly.
+- [x] Service test proves a broken vision model still returns prompts and reports itself.
+- [x] Chromium E2E proves the default run fills box 1 with the current prompt, boxes 2-4
+      with panels, and shows the status without opening a section.
+- [x] The full test suite and CI pass (122 passed, 1 browser-only skip; 6 Chromium E2E passed).

@@ -420,6 +420,36 @@ def test_service_keeps_the_image_description_out_of_a_new_prompt() -> None:
     assert compiler.last_request.edit_instruction is None
 
 
+def test_service_survives_a_failing_vision_model() -> None:
+    plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして")
+    compiler = FakeCompiler()
+
+    class BrokenVisionClient:
+        def generate(self, _request):
+            raise RuntimeError("model 'qwen3-vl:8b' not found")
+
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: compiler,
+        vision_factory=lambda _url, _model: BrokenVisionClient(),
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="夜にして",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+    )
+
+    # The description is an aid; losing it must not lose the prompt.
+    assert result.candidates
+    assert result.image_description == ""
+    assert "Image description failed" in result.status
+    assert "not found" in result.status
+
+
 def test_service_reuses_an_edited_description_without_calling_the_vlm() -> None:
     plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして")
     compiler = FakeCompiler()

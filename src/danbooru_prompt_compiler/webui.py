@@ -23,6 +23,7 @@ from .web_service import (
     ProgressCallback,
     WebPromptService,
     WebRunRequest,
+    WebRunResult,
 )
 
 
@@ -36,6 +37,8 @@ PROGRESS_LABELS = {
 }
 MAX_HISTORY_ITEMS = 20
 MAX_OUTPUT_VARIANTS = 4
+# Prompt boxes 2-4 hold the next-panel proposals that follow box 1.
+NEXT_PANEL_SLOTS = MAX_OUTPUT_VARIANTS - 1
 IMAGE_INPUT_JS = r"""
 () => {
   if (document.documentElement.dataset.imageUrlDropReady === "true") return;
@@ -211,7 +214,9 @@ def run_workbench(
     *,
     on_progress: ProgressCallback | None = None,
 ) -> WorkbenchOutputs:
-    """Resolve the image source, run one request, and fold errors into the status."""
+    """Resolve the image source, run the request, and fold errors into the status."""
+    follow_up: WebRunResult | None = None
+    follow_up_error = ""
     try:
         with resolve_image_source(
             request.image_path,
@@ -223,6 +228,24 @@ def run_workbench(
                 on_progress=on_progress,
                 **request.service_options(),
             )
+            if _wants_next_panel_follow_up(request, result):
+                try:
+                    follow_up = service.run(
+                        image_path=resolved_image_path,
+                        on_progress=on_progress,
+                        **{
+                            **request.service_options(),
+                            "action_override": "next_panel",
+                            "variants": NEXT_PANEL_SLOTS,
+                            # Reuse what the first run already resolved so the
+                            # panels continue exactly the prompt in box 1.
+                            "edited_tags": result.inferred_tags,
+                            "edited_description": result.image_description,
+                        },
+                    )
+                except Exception as exc:
+                    # The primary result is still worth showing on its own.
+                    follow_up_error = str(exc)
     except Exception as exc:
         return WorkbenchOutputs(
             action_plan={},
@@ -242,6 +265,12 @@ def run_workbench(
             history=history or [],
         )
 
+    candidates = _merge_candidates(result, follow_up)
+    status = result.status
+    if follow_up is not None:
+        status += f"\n\n次のコマ: {len(follow_up.candidates)}件"
+    elif follow_up_error:
+        status += f"\n\n次のコマの生成に失敗: {follow_up_error}"
     updated_history = prepend_history(
         history,
         action=str(result.action_plan.get("action", "")),
@@ -252,11 +281,32 @@ def run_workbench(
         action_plan=result.action_plan,
         inferred_tags=result.inferred_tags,
         image_description=result.image_description,
-        prompts=prompt_box_values(result.candidates),
-        status=result.status,
-        candidates=result.candidates,
+        prompts=prompt_box_values(candidates),
+        status=status,
+        candidates=candidates,
         history=updated_history,
     )
+
+
+def _wants_next_panel_follow_up(request: WebRunRequest, result: WebRunResult) -> bool:
+    """Whether boxes 2-4 should hold next-panel proposals for this result."""
+    if not request.generate_next_panel:
+        return False
+    # An explicit next-panel run already fills every box with panels.
+    if result.action_plan.get("action") == "next_panel":
+        return False
+    # The follow-up continues an existing prompt, so it needs one to continue.
+    return bool(result.inferred_tags or request.base_prompt.strip())
+
+
+def _merge_candidates(
+    result: WebRunResult,
+    follow_up: WebRunResult | None,
+) -> list[str]:
+    if follow_up is None:
+        return result.candidates
+    # Box 1 keeps the current prompt; the panels take the boxes after it.
+    return [*result.candidates[:1], *follow_up.candidates[:NEXT_PANEL_SLOTS]]
 
 
 def build_app(*, service: WebPromptService | None = None):
@@ -472,6 +522,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "character_threshold": settings.character_threshold,
         "max_image_tags": settings.max_image_tags,
         "variants": controls.variants,
+        "generate_next_panel": controls.generate_next_panel,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": settings.action_override,
@@ -534,7 +585,7 @@ def _build_image_column(gr) -> SimpleNamespace:
                 "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
             )
         use_vision = gr.Checkbox(
-            value=False,
+            value=True,
             label="VLMで画像を説明する",
             info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
         )
@@ -577,11 +628,17 @@ def _build_instruction_column(gr) -> SimpleNamespace:
                 lines=4,
                 elem_id="base-prompt-input",
             )
+        generate_next_panel = gr.Checkbox(
+            value=True,
+            label="次のコマも生成する（出力2〜4）",
+            info="出力1に現在の結果、出力2〜4に一瞬後の場面の候補を入れます。",
+        )
         with gr.Row():
             variants = gr.Radio(
                 choices=[1, 2, 3, 4],
                 value=4,
                 label="出力数",
+                info="「次のコマも生成する」がオフのときの出力数です。",
             )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
@@ -591,13 +648,14 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             )
             cancel_button = gr.Button("停止", variant="stop")
         gr.Markdown(
-            "「次のコマ」は指示がなくても押せます。画像だけを置いて押すと、"
-            "一瞬後の場面を提案します。"
+            "「次のコマ」ボタンは指示がなくても押せます。画像だけを置いて押すと、"
+            "4枠すべてに一瞬後の場面を提案します。"
         )
     return SimpleNamespace(
         instruction=instruction,
         base_prompt=base_prompt,
         variants=variants,
+        generate_next_panel=generate_next_panel,
         run_button=run_button,
         next_panel_button=next_panel_button,
         cancel_button=cancel_button,
@@ -718,6 +776,8 @@ def _build_result_section(gr) -> SimpleNamespace:
                         elem_id=f"prompt-output-{index + 1}",
                     )
                 )
+    # Errors land here, so it must not be hidden inside a collapsed section.
+    status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
     with gr.Accordion("候補の採用・履歴", open=False):
         with gr.Row():
@@ -728,9 +788,7 @@ def _build_result_section(gr) -> SimpleNamespace:
             adopt_button = gr.Button("選択候補を採用")
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
     with gr.Accordion("実行情報", open=False):
-        with gr.Row():
-            action_plan = gr.JSON(label="実行計画")
-            status = gr.Markdown(label="状態")
+        action_plan = gr.JSON(label="実行計画")
     return SimpleNamespace(
         inferred_tags=inferred_tags,
         prompts=prompts,

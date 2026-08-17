@@ -26,6 +26,8 @@ def _predict(client: Client, image, image_url: str, allow_private: bool):
         ollama_url="http://127.0.0.1:11434",
         max_image_tags=12,
         variants=1,
+        # One service run per predict keeps the image assertions readable.
+        generate_next_panel=False,
         allow_private_image_urls=allow_private,
     ).to_values()
     # The client sends an upload payload where the server sees a resolved path.

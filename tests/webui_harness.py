@@ -24,9 +24,17 @@ class RecordingWebService:
         self.image_digests.append(digest)
         self.run_options.append({"image_path": image_path, **_options})
         output = f"digest_{digest}" if digest else "no_image"
-        candidates = self.candidates or [output]
+        is_next_panel = _options.get("action_override") == "next_panel"
+        candidates = (
+            ["panel_a", "panel_b", "panel_c"]
+            if is_next_panel
+            else (self.candidates or [output])
+        )
         return WebRunResult(
-            action_plan={"action": "tag_image", "router_source": "test"},
+            action_plan={
+                "action": "next_panel" if is_next_panel else "tag_image",
+                "router_source": "test",
+            },
             inferred_tags="1girl, solo",
             output="\n\n".join(candidates),
             status="ok",
