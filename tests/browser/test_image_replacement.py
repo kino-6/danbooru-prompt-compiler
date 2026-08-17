@@ -128,6 +128,7 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
                 page.get_by_text("実行情報", exact=True).click()
                 expect(page.get_by_text("URL画像を読み込みました。", exact=True)).to_be_visible()
                 page.get_by_role("button", name="実行", exact=True).click()
+                page.get_by_text("画像タグの確認・修正", exact=True).click()
                 expect(page.locator("#inferred-tags-editor textarea")).to_have_value(
                     "1girl, solo"
                 )
