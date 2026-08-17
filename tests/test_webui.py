@@ -36,7 +36,12 @@ def test_run_workbench_maps_a_request_onto_outputs_without_gradio() -> None:
 
     outputs = run_workbench(
         service,
-        WebRunRequest(instruction="夜にして", base_prompt="1girl", variants=2),
+        WebRunRequest(
+            instruction="夜にして",
+            base_prompt="1girl",
+            variants=2,
+            generate_next_panel=False,
+        ),
         [],
         on_progress=lambda stage, _fraction: stages.append(stage),
     )
@@ -68,13 +73,99 @@ def test_run_workbench_returns_the_image_description_for_editing() -> None:
 
     outputs = run_workbench(
         service,
-        WebRunRequest(instruction="夜にして", use_vision=True),
+        WebRunRequest(
+            instruction="夜にして",
+            use_vision=True,
+            generate_next_panel=False,
+        ),
         [],
     )
 
     assert service.options is not None
     assert service.options["edited_description"] == ""
     assert outputs.image_description == "石段に立つ少女"
+
+
+class TwoRunService(RecordingService):
+    """Answers the primary run and the next-panel follow-up differently."""
+
+    def __init__(self, follow_up_error: Exception | None = None) -> None:
+        super().__init__()
+        self.follow_up_error = follow_up_error
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
+        self.calls.append({"image_path": image_path, **options})
+        if options.get("action_override") == "next_panel":
+            if self.follow_up_error is not None:
+                raise self.follow_up_error
+            return WebRunResult(
+                action_plan={"action": "next_panel"},
+                inferred_tags="1girl, rain",
+                output="panels",
+                status="panel ok",
+                candidates=["panel_a", "panel_b", "panel_c", "panel_d"],
+                image_description="石段に立つ少女",
+            )
+        return WebRunResult(
+            action_plan={"action": "tag_image"},
+            inferred_tags="1girl, rain",
+            output="1girl, rain",
+            status="ok",
+            candidates=["current"],
+            image_description="石段に立つ少女",
+        )
+
+
+def test_next_panel_follow_up_fills_the_boxes_after_the_current_prompt() -> None:
+    service = TwoRunService()
+
+    outputs = run_workbench(service, WebRunRequest(instruction="タグを推測して"), [])
+
+    assert outputs.prompts == ["current", "panel_a", "panel_b", "panel_c"]
+    assert outputs.candidates == ["current", "panel_a", "panel_b", "panel_c"]
+    assert "次のコマ: 4件" in outputs.status
+    # The follow-up continues the prompt in box 1 instead of re-deriving it.
+    follow_up = service.calls[1]
+    assert follow_up["action_override"] == "next_panel"
+    assert follow_up["variants"] == 3
+    assert follow_up["edited_tags"] == "1girl, rain"
+    assert follow_up["edited_description"] == "石段に立つ少女"
+
+
+def test_next_panel_follow_up_failure_keeps_the_primary_result() -> None:
+    service = TwoRunService(follow_up_error=RuntimeError("model missing"))
+
+    outputs = run_workbench(service, WebRunRequest(instruction="タグを推測して"), [])
+
+    assert outputs.prompts == ["current", "", "", ""]
+    assert "次のコマの生成に失敗: model missing" in outputs.status
+
+
+def test_next_panel_follow_up_is_skipped_for_an_explicit_next_panel_run() -> None:
+    service = TwoRunService()
+
+    outputs = run_workbench(
+        service,
+        WebRunRequest(instruction="", action_override="next_panel"),
+        [],
+    )
+
+    assert len(service.calls) == 1
+    assert outputs.prompts == ["panel_a", "panel_b", "panel_c", "panel_d"]
+
+
+def test_next_panel_follow_up_can_be_switched_off() -> None:
+    service = TwoRunService()
+
+    outputs = run_workbench(
+        service,
+        WebRunRequest(instruction="タグを推測して", generate_next_panel=False),
+        [],
+    )
+
+    assert len(service.calls) == 1
+    assert outputs.prompts == ["current", "", "", ""]
 
 
 def test_run_workbench_keeps_the_edited_description_after_a_failure() -> None:
@@ -141,7 +232,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
         value for _label, value in components["操作種別"]["props"]["choices"]
     }
     assert action_values == {"auto", "tag_image", "compile", "edit", "next_panel"}
-    assert components["VLMで画像を説明する"]["props"]["value"] is False
+    assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload"]
@@ -214,7 +305,7 @@ def test_vision_controls_are_visible_without_opening_a_section() -> None:
     # The description is worthless if the switch that fills it, or the box it
     # lands in, is hidden inside a collapsed section.
     assert _folded_ancestor_labels(app, "image-description-editor") == []
-    assert components["VLMで画像を説明する"]["props"]["value"] is False
+    assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["画像の説明（VLM）"]["props"]["interactive"] is True
 
 

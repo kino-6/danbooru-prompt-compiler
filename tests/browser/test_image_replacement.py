@@ -45,6 +45,8 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             expect(page.get_by_label("VLMで画像を説明する")).to_be_visible()
             image_description.fill("石段に立つ少女")
 
+            # One run per click keeps the replacement assertions unambiguous.
+            page.get_by_label("次のコマも生成する（出力2〜4）").uncheck()
             page.get_by_role("button", name="実行", exact=True).click()
             page.get_by_text("画像タグの確認・修正", exact=True).click()
             inferred_tags = page.locator("#inferred-tags-editor textarea")
@@ -86,6 +88,8 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             page = browser.new_page()
             page.goto(url)
             page.locator('input[type="file"]').first.set_input_files(str(image))
+            # This covers the plain multi-variant layout, without panel follow-ups.
+            page.get_by_label("次のコマも生成する（出力2〜4）").uncheck()
             page.get_by_role("button", name="実行", exact=True).click()
 
             for index, prompt in enumerate(prompts, 1):
@@ -100,6 +104,34 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             expect(fourth).to_be_visible()
             expect(fourth).to_be_editable()
             expect(fourth).to_have_value("")
+            browser.close()
+
+
+def test_next_panel_proposals_fill_the_boxes_after_the_current_prompt(tmp_path) -> None:
+    image = tmp_path / "panel.png"
+    Image.new("RGB", (4, 4), "teal").save(image)
+
+    with running_test_webui(candidates=["1girl, solo\nrain"]) as (url, service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
+            expect(page.locator('#image-workspace img[src*="panel.png"]')).to_be_visible()
+
+            # The follow-up is on by default; no section needs opening.
+            expect(page.get_by_label("次のコマも生成する（出力2〜4）")).to_be_checked()
+            page.get_by_role("button", name="実行", exact=True).click()
+
+            expect(page.locator("#prompt-output-1 textarea")).to_have_value("1girl, solo\nrain")
+            for index, panel in enumerate(("panel_a", "panel_b", "panel_c"), start=2):
+                expect(page.locator(f"#prompt-output-{index} textarea")).to_have_value(panel)
+            expect(page.locator("#run-status")).to_be_visible()
+
+            assert [options["action_override"] for options in service.run_options] == [
+                "auto",
+                "next_panel",
+            ]
             browser.close()
 
 
