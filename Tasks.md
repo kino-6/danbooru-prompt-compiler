@@ -138,3 +138,16 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Component configuration exposes output count 1–4 with default 4.
 - [x] Real-service API returns four independent multiline prompts when output count is 4.
 - [x] Chromium E2E passes with multiline prompt values.
+
+## Task 12 — Filter low-value image tags and reset replaced images
+
+- [x] Exclude configurable exact-match and wildcard image tags before prompt compilation.
+- [x] Add folded Web UI controls for enabling and editing the exclusion rules.
+- [x] Clear inferred tags, base prompt, candidates, and prompt outputs when an image is replaced.
+
+### Gate
+
+- [x] Unit tests prove default filtering, wildcard matching, and disabling the filter.
+- [x] Gradio configuration exposes enabled-by-default folded filter controls.
+- [x] Chromium E2E proves replacing an image clears old image-dependent prompt state.
+- [ ] The full test suite and CI pass.
