@@ -163,5 +163,5 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 
 - [x] Gradio configuration proves the unified image workspace accepts upload, clipboard, and URL-drop input.
 - [x] Unit tests prove every secondary section is initially folded.
-- [ ] Chromium E2E proves replacing an image through the unified workspace clears old prompt state.
-- [ ] The full test suite and CI pass.
+- [x] Chromium E2E proves replacing an image through the unified workspace clears old prompt state and URL drops remain the active source.
+- [x] The full test suite and CI pass (85 passed, 1 browser-only skip; 3 Chromium E2E passed).
