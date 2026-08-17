@@ -21,6 +21,7 @@ PROGRESS_LABELS = {
     "complete": "完了",
 }
 MAX_HISTORY_ITEMS = 20
+MAX_OUTPUT_VARIANTS = 4
 
 
 def prepend_history(
@@ -41,6 +42,14 @@ def prepend_history(
 
 def adopt_candidate(candidate: str | None) -> str:
     return candidate or ""
+
+
+def prompt_box_values(candidates: list[str]) -> list[tuple[str, bool]]:
+    values = candidates[:MAX_OUTPUT_VARIANTS]
+    return [
+        (values[index], True) if index < len(values) else ("", False)
+        for index in range(MAX_OUTPUT_VARIANTS)
+    ]
 
 
 def accept_dropped_image(image_path: str | None):
@@ -135,20 +144,28 @@ def build_app(*, service: WebPromptService | None = None):
                 choices=result.candidates,
                 value=result.candidates[0] if result.candidates else None,
             )
+            prompt_updates = [
+                gr.Textbox(value=value, visible=visible)
+                for value, visible in prompt_box_values(result.candidates)
+            ]
             return (
                 result.action_plan,
                 result.inferred_tags,
-                result.output,
+                *prompt_updates,
                 result.status,
                 candidate_update,
                 updated_history,
                 updated_history,
             )
         except Exception as exc:
+            prompt_updates = [
+                gr.Textbox(value="", visible=False)
+                for _ in range(MAX_OUTPUT_VARIANTS)
+            ]
             return (
                 {},
                 "",
-                "",
+                *prompt_updates,
                 "Error: "
                 + format_ollama_error(
                     exc,
@@ -269,11 +286,18 @@ def build_app(*, service: WebPromptService | None = None):
             buttons=["copy"],
             interactive=True,
         )
-        prompt_output = gr.Textbox(
-            label="出力プロンプト",
-            lines=14,
-            buttons=["copy"],
-        )
+        prompt_outputs = []
+        for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
+            with gr.Row():
+                for index in range(row_start, row_start + 2):
+                    prompt_outputs.append(
+                        gr.Textbox(
+                            label=f"出力プロンプト {index + 1}",
+                            lines=10,
+                            buttons=["copy"],
+                            visible=index == 0,
+                        )
+                    )
         with gr.Row():
             candidate_selector = gr.Radio(
                 choices=[],
@@ -305,7 +329,7 @@ def build_app(*, service: WebPromptService | None = None):
         outputs = [
             action_plan_output,
             inferred_tags_editor,
-            prompt_output,
+            *prompt_outputs,
             status_output,
             candidate_selector,
             history_state,

@@ -318,6 +318,7 @@ def test_service_exposes_variants_as_separate_candidates() -> None:
     )
 
     assert len(result.candidates) == 2
-    assert result.candidates[0].startswith("[variant 1]")
-    assert result.candidates[1].startswith("[variant 2]")
-    assert result.output == "\n\n".join(result.candidates)
+    assert not result.candidates[0].startswith("[variant")
+    assert not result.candidates[1].startswith("[variant")
+    assert "[variant 1]\n" + result.candidates[0] in result.output
+    assert "[variant 2]\n" + result.candidates[1] in result.output

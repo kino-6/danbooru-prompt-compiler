@@ -176,9 +176,10 @@ class WebPromptService:
                     routed.plan.edit_instruction or clean_instruction
                 ),
             )
+        candidates = [format_variant(tags, OutputFormat.grouped) for tags in output_variants]
         rendered_variants = [
-            _render_variant(index, tags, multiple=len(output_variants) > 1)
-            for index, tags in enumerate(output_variants, start=1)
+            _render_candidate(index, candidate, multiple=len(candidates) > 1)
+            for index, candidate in enumerate(candidates, start=1)
         ]
         status = _status_text(
             routed,
@@ -192,7 +193,7 @@ class WebPromptService:
             inferred_tags=inferred_text,
             output="\n\n".join(rendered_variants),
             status=status,
-            candidates=rendered_variants,
+            candidates=candidates,
         )
         _report_progress(on_progress, "complete", 1.0)
         return result
@@ -368,9 +369,9 @@ def _vision_prompt(instruction: str) -> str:
     )
 
 
-def _render_variant(index: int, tags: list[str], *, multiple: bool) -> str:
+def _render_candidate(index: int, candidate: str, *, multiple: bool) -> str:
     prefix = f"[variant {index}]\n" if multiple else ""
-    return prefix + format_variant(tags, OutputFormat.grouped)
+    return prefix + candidate
 
 
 def _stabilize_next_panel_variants(

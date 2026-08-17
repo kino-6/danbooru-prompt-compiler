@@ -52,7 +52,7 @@ def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:
     try:
         with running_test_webui() as (url, service):
             client = Client(url, verbose=False)
-            _predict(client, handle_file(first), "", False)
+            first_result = _predict(client, handle_file(first), "", False)
             _predict(client, handle_file(second), "", False)
             _predict(
                 client,
@@ -67,3 +67,7 @@ def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:
     first_digest = hashlib.sha256(first.read_bytes()).hexdigest()
     second_digest = hashlib.sha256(second.read_bytes()).hexdigest()
     assert service.image_digests == [first_digest, second_digest, first_digest]
+    assert len(first_result) == 9
+    assert first_result[2]["value"] == f"digest_{first_digest}"
+    assert first_result[2]["visible"] is True
+    assert all(update["visible"] is False for update in first_result[3:6])

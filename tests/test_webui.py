@@ -10,6 +10,7 @@ from danbooru_prompt_compiler.webui import (  # noqa: E402
     adopt_candidate,
     build_app,
     prepend_history,
+    prompt_box_values,
 )
 
 
@@ -81,3 +82,18 @@ def test_history_is_newest_first_and_bounded() -> None:
     assert len(history) == 20
     assert history[0]["instruction"] == "instruction 24"
     assert history[-1]["instruction"] == "instruction 5"
+
+
+def test_prompt_candidates_get_independent_copyable_boxes() -> None:
+    values = prompt_box_values(["first prompt", "second prompt"])
+
+    assert values == [
+        ("first prompt", True),
+        ("second prompt", True),
+        ("", False),
+        ("", False),
+    ]
+    components = _components_by_label(build_app())
+    for index in range(1, 5):
+        props = components[f"出力プロンプト {index}"]["props"]
+        assert "copy" in props["buttons"]
