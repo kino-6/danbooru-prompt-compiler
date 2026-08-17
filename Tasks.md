@@ -311,3 +311,25 @@ be expressed as a tag.
 - [x] Unit test proves a text-only prompt never receives the description.
 - [x] Chromium E2E proves the description field is editable and clears with the image.
 - [x] The full test suite and CI pass (107 passed, 1 browser-only skip; 5 Chromium E2E passed).
+
+## Task 23 — Close the exclusion-word gaps and surface the VLM description
+
+`censored_nipples`, `censored_text`, and the rest of the `censored_*` family slipped past
+`censored, *_censor, *_censoring`, and rendered-text tags such as `english_text` were never
+covered. The tests passed because they only asserted the three spellings the rules matched.
+
+- [x] Replace the censorship rules with `*censor*`, covering every dictionary spelling.
+- [x] Exclude rendered text, signatures, watermarks, usernames, and logos by default.
+- [x] Keep texture tags and `speech_bubble` out of the exclusion list.
+- [x] Move the VLM switch and the description box out of the folded sections, next to the image.
+- [x] Say in the UI that a saved list shadows updated defaults, and that `既定に戻す` adopts them.
+
+### Gate
+
+- [x] Regression test proves no `censor` tag in `data/tags.json` survives the defaults.
+- [x] Regression test proves every `*_text` tag in the dictionary, `english_text` included, is excluded.
+- [x] Unit test proves near-miss tags such as `paper_texture` and `speech_bubble` survive.
+- [x] Unit test proves the description box has no collapsed ancestor, self-checked against a
+      component that does.
+- [x] Chromium E2E proves the VLM switch and description are visible without opening a section.
+- [x] The full test suite and CI pass (117 passed, 1 browser-only skip; 5 Chromium E2E passed).

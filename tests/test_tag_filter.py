@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from danbooru_prompt_compiler.tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
@@ -11,6 +14,16 @@ from danbooru_prompt_compiler.tag_filter import (
     split_excluded,
 )
 
+TAG_DICTIONARY_PATH = Path(__file__).resolve().parents[1] / "data" / "tags.json"
+
+
+def _dictionary_tags() -> list[str]:
+    if not TAG_DICTIONARY_PATH.is_file():
+        pytest.skip("tag dictionary is not available")
+    stored = json.loads(TAG_DICTIONARY_PATH.read_text(encoding="utf-8"))
+    tags = stored if isinstance(stored, list) else stored.get("tags", [])
+    return [tag["name"] if isinstance(tag, dict) else str(tag) for tag in tags]
+
 
 def test_default_exclusions_cover_censor_tags() -> None:
     rules = parse_exclusion_rules(DEFAULT_EXCLUSION_TEXT)
@@ -18,10 +31,48 @@ def test_default_exclusions_cover_censor_tags() -> None:
     assert is_excluded("censored", rules)
     assert is_excluded("bar_censor", rules)
     assert is_excluded("mosaic_censoring", rules)
+    assert is_excluded("censored_nipples", rules)
+    assert is_excluded("censor", rules)
     assert is_excluded("simple_background", rules)
     assert is_excluded("green_background", rules)
-    assert not is_excluded("censor", rules)
     assert not is_excluded("1girl", rules)
+
+
+def test_no_censor_tag_in_the_dictionary_survives_the_defaults() -> None:
+    rules = parse_exclusion_rules(DEFAULT_EXCLUSION_TEXT)
+    censor_tags = [tag for tag in _dictionary_tags() if "censor" in tag]
+
+    assert censor_tags, "the dictionary should contain censorship tags"
+    assert [tag for tag in censor_tags if not is_excluded(tag, rules)] == []
+
+
+def test_default_exclusions_cover_rendered_text_tags() -> None:
+    rules = parse_exclusion_rules(DEFAULT_EXCLUSION_TEXT)
+    text_tags = [
+        tag
+        for tag in _dictionary_tags()
+        if tag.endswith("_text") or tag in {"text_focus", "watermark", "signature", "logo"}
+    ]
+
+    assert "english_text" in text_tags
+    assert [tag for tag in text_tags if not is_excluded(tag, rules)] == []
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "1girl",
+        "texture",
+        "paper_texture",
+        "speech_bubble",
+        "text_messaging",
+        "analogous_colors",
+        "long_hair",
+    ],
+)
+def test_default_exclusions_keep_ordinary_tags(tag: str) -> None:
+    # Wildcards are easy to over-broaden; these are the near misses.
+    assert not is_excluded(tag, parse_exclusion_rules(DEFAULT_EXCLUSION_TEXT))
 
 
 def test_rules_are_normalized_and_deduplicated() -> None:
