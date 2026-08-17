@@ -111,3 +111,16 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit tests prove variants remain separate and copy text has no variant header.
 - [x] Gradio configuration exposes four independently copyable output boxes.
 - [x] Named Gradio API regression test passes with the expanded outputs.
+
+## Task 10 — Fix hidden/read-only prompt variants
+
+- [x] Keep all four prompt output boxes mounted and visible.
+- [x] Return plain textbox values instead of visibility update objects.
+- [x] Render each candidate as a flat comma-separated prompt without grouped diagnostics.
+- [x] Make every output textbox editable and retain its copy button.
+
+### Gate
+
+- [x] Unit and API tests prove three candidates populate output boxes 1–3 independently.
+- [x] Component configuration proves all four boxes are visible, editable, and copy-enabled.
+- [ ] Chromium E2E proves three candidates are simultaneously visible, editable, and contain copy-ready text.
