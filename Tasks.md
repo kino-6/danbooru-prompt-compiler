@@ -151,3 +151,17 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Gradio configuration exposes enabled-by-default folded filter controls.
 - [x] Chromium E2E proves replacing an image clears old image-dependent prompt state.
 - [x] The full test suite and CI pass (83 passed, 1 browser-only skip; 2 Chromium E2E passed).
+
+## Task 13 — Simplify and fold the Web UI
+
+- [x] Replace the separate file drop target, selected filename, and preview with one image workspace.
+- [x] Support local drag-and-drop, file selection, clipboard paste, and remote-image URL drops from that workspace.
+- [x] Keep manual URL entry as a folded fallback.
+- [x] Fold the existing-prompt editor, inferred tags, candidate history, execution details, and advanced settings.
+
+### Gate
+
+- [x] Gradio configuration proves the unified image workspace accepts upload, clipboard, and URL-drop input.
+- [x] Unit tests prove every secondary section is initially folded.
+- [ ] Chromium E2E proves replacing an image through the unified workspace clears old prompt state.
+- [ ] The full test suite and CI pass.
