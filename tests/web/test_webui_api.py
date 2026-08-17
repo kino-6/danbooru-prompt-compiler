@@ -66,6 +66,7 @@ def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:
     first_digest = hashlib.sha256(first.read_bytes()).hexdigest()
     second_digest = hashlib.sha256(second.read_bytes()).hexdigest()
     assert service.image_digests == [first_digest, second_digest, first_digest]
-    assert len(first_result) == 9
-    assert first_result[2:5] == tuple(prompts)
-    assert first_result[5] == ""
+    # plan, tags, description, 4 prompts, status, candidates, history
+    assert len(first_result) == 10
+    assert first_result[3:6] == tuple(prompts)
+    assert first_result[6] == ""
