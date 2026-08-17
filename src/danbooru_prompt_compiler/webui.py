@@ -54,7 +54,9 @@ IMAGE_URL_DROP_JS = r"""
     const field = document.querySelector(
       "#dropped-image-url-input textarea, #dropped-image-url-input input"
     );
-    const button = document.querySelector("#dropped-image-url-button button");
+    const button = document.querySelector(
+      "button#dropped-image-url-button, #dropped-image-url-button button"
+    );
     if (!field || !button) return;
     field.value = url;
     field.dispatchEvent(new Event("input", { bubbles: true }));

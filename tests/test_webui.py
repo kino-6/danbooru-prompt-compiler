@@ -91,7 +91,7 @@ def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:
     script = url_drop_dependencies[0]["js"]
     assert 'event.target.closest("#image-workspace")' in script
     assert '"#dropped-image-url-input textarea' in script
-    assert 'querySelector("#dropped-image-url-button button")' in script
+    assert '"button#dropped-image-url-button, #dropped-image-url-button button"' in script
 
 
 def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:
