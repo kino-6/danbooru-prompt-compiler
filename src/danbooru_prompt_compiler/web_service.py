@@ -4,7 +4,9 @@ import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
+
+from pydantic import BaseModel
 
 from .compiler import PromptCompiler
 from .formatter import (
@@ -35,6 +37,7 @@ from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedP
 DEFAULT_ROUTER_MODEL = "qwen3:1.7b"
 DEFAULT_COMPILER_MODEL = "qwen3:1.7b"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 ProgressCallback = Callable[[str, float], None]
 INSTRUCTION_TAG_HINTS = {
     "振り返": "looking_back",
@@ -47,6 +50,48 @@ INSTRUCTION_TAG_HINTS = {
     "驚": "surprised",
     "手を振": "waving",
 }
+
+
+class WebRunRequest(BaseModel):
+    """Every Web UI run parameter, in the order the Gradio inputs are built."""
+
+    image_path: str | None = None
+    image_url: str = ""
+    instruction: str = ""
+    base_prompt: str = ""
+    router_model: str = DEFAULT_ROUTER_MODEL
+    compiler_model: str = DEFAULT_COMPILER_MODEL
+    ollama_url: str = DEFAULT_OLLAMA_URL
+    general_threshold: float = 0.35
+    character_threshold: float = 0.85
+    max_image_tags: int = 50
+    variants: int = 4
+    edited_tags: str = ""
+    action_override: str = "auto"
+    use_vision: bool = False
+    vision_model: str = DEFAULT_VISION_MODEL
+    allow_private_image_urls: bool = False
+    apply_tag_exclusions: bool = True
+    excluded_tags: str = DEFAULT_EXCLUSION_TEXT
+
+    @classmethod
+    def from_values(cls, values: Sequence[object]) -> "WebRunRequest":
+        return cls(**dict(zip(WEB_RUN_FIELDS, values)))
+
+    def to_values(self) -> list[object]:
+        return [getattr(self, name) for name in WEB_RUN_FIELDS]
+
+    def service_options(self) -> dict[str, object]:
+        return {
+            name: value
+            for name, value in self.model_dump().items()
+            if name not in IMAGE_SOURCE_FIELDS
+        }
+
+
+# Resolved by the Web UI into a single image path before the service runs.
+IMAGE_SOURCE_FIELDS = ("image_path", "image_url", "allow_private_image_urls")
+WEB_RUN_FIELDS: tuple[str, ...] = tuple(WebRunRequest.model_fields)
 
 
 @dataclass(frozen=True)
@@ -83,7 +128,7 @@ class WebPromptService:
         base_prompt: str,
         router_model: str = DEFAULT_ROUTER_MODEL,
         compiler_model: str = DEFAULT_COMPILER_MODEL,
-        ollama_url: str = "http://localhost:11434",
+        ollama_url: str = DEFAULT_OLLAMA_URL,
         general_threshold: float = 0.35,
         character_threshold: float = 0.85,
         max_image_tags: int = 50,
@@ -181,6 +226,7 @@ class WebPromptService:
             base_prompt=clean_base_prompt,
             inferred_tags=inferred_names,
             vision_observation=vision_observation,
+            exclusion_rules=exclusion_rules,
         )
         compile_result = compiler.compile(compile_request)
         output_variants = compile_result.variants
@@ -194,9 +240,14 @@ class WebPromptService:
                     routed.plan.edit_instruction or clean_instruction
                 ),
             )
-        output_variants, excluded_prompt_tags = _exclude_variant_tags(
+        # The compiler already dropped excluded tags; this catches tags that
+        # next-panel stabilization re-injects from manually edited image tags.
+        output_variants, restabilized_exclusions = _exclude_variant_tags(
             output_variants,
             exclusion_rules,
+        )
+        excluded_prompt_tags = list(
+            dict.fromkeys([*compile_result.excluded_tags, *restabilized_exclusions])
         )
         candidates = [
             format_clipboard_text(tags, OutputFormat.grouped) for tags in output_variants
@@ -385,12 +436,15 @@ def _build_compile_request(
     base_prompt: str,
     inferred_tags: list[str],
     vision_observation: str = "",
+    exclusion_rules: list[str] | None = None,
 ) -> CompileRequest:
+    exclusion_rules = exclusion_rules or []
     if plan.action == WebAction.compile:
         return CompileRequest(
             scene_description=plan.scene_description or instruction,
             variants=plan.variants,
             input_type=InputType.scene,
+            excluded_tags=exclusion_rules,
         )
 
     source_tags = base_prompt or ", ".join(inferred_tags)
@@ -429,6 +483,7 @@ def _build_compile_request(
         input_type=InputType.prompt,
         edit_instruction=edit_instruction,
         max_output_tags=min(max(len(inferred_tags) + 8, 20), 50),
+        excluded_tags=exclusion_rules,
     )
 
 

@@ -2,6 +2,70 @@ from __future__ import annotations
 
 import pytest
 
+from danbooru_prompt_compiler.web_service import (
+    WEB_RUN_FIELDS,
+    WebRunRequest,
+    WebRunResult,
+)
+from danbooru_prompt_compiler.webui import run_workbench
+
+
+class RecordingService:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.options: dict[str, object] | None = None
+
+    def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
+        if self.error is not None:
+            raise self.error
+        self.options = {"image_path": image_path, **options}
+        if on_progress is not None:
+            on_progress("complete", 1.0)
+        return WebRunResult(
+            action_plan={"action": "edit"},
+            inferred_tags="1girl, rain",
+            output="1girl, rain",
+            status="ok",
+            candidates=["1girl, rain", "1girl, night"],
+        )
+
+
+def test_run_workbench_maps_a_request_onto_outputs_without_gradio() -> None:
+    service = RecordingService()
+    stages: list[str] = []
+
+    outputs = run_workbench(
+        service,
+        WebRunRequest(instruction="夜にして", base_prompt="1girl", variants=2),
+        [],
+        on_progress=lambda stage, _fraction: stages.append(stage),
+    )
+
+    assert service.options is not None
+    assert service.options["instruction"] == "夜にして"
+    assert "image_url" not in service.options
+    assert "allow_private_image_urls" not in service.options
+    assert outputs.prompts == ["1girl, rain", "1girl, night", "", ""]
+    assert outputs.candidates == ["1girl, rain", "1girl, night"]
+    assert outputs.history[0]["instruction"] == "夜にして"
+    assert stages == ["complete"]
+
+
+def test_run_workbench_turns_failures_into_a_status_and_keeps_history() -> None:
+    history = [{"action": "edit", "instruction": "前回", "output": "1girl"}]
+
+    outputs = run_workbench(
+        RecordingService(error=ValueError("画像を入力してください。")),
+        WebRunRequest(instruction="夜にして"),
+        history,
+    )
+
+    assert outputs.status.startswith("Error: ")
+    assert "画像を入力してください。" in outputs.status
+    assert outputs.prompts == ["", "", "", ""]
+    assert outputs.candidates == []
+    assert outputs.history == history
+
 
 gradio = pytest.importorskip("gradio")
 
@@ -98,6 +162,32 @@ def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:
     assert 'event.target.closest("#image-workspace")' in script
     assert '"#dropped-image-url-input textarea' in script
     assert '"button#dropped-image-url-button, #dropped-image-url-button button"' in script
+
+
+def test_run_inputs_follow_the_request_model_order() -> None:
+    app = build_app()
+    run_dependency = next(
+        dependency
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") == "run_prompt_workbench"
+    )
+    components = {
+        component["id"]: component for component in app.config["components"]
+    }
+    input_labels = [
+        components[component_id]["props"].get("label")
+        for component_id in run_dependency["inputs"]
+    ]
+
+    # One input per request field, plus the trailing session-history state.
+    assert len(run_dependency["inputs"]) == len(WEB_RUN_FIELDS) + 1
+    assert components[run_dependency["inputs"][-1]]["type"] == "state"
+    assert input_labels[WEB_RUN_FIELDS.index("instruction")] == "どうしたい？"
+    assert input_labels[WEB_RUN_FIELDS.index("variants")] == "出力数"
+    assert (
+        input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
+        == "除外ワード（カンマ区切り、*使用可）"
+    )
 
 
 def test_pasted_clipboard_image_is_routed_into_the_image_workspace() -> None:

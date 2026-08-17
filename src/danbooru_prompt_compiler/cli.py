@@ -20,6 +20,7 @@ from .llm import OllamaClient
 from .models import CompileMode, CompileRequest, InputType
 from .reference_tags import load_reference_tags
 from .suggestions import suggest_edit_instructions
+from .tag_filter import resolve_exclusion_rules, split_excluded
 
 app = typer.Typer(help="Compile scene descriptions into Danbooru-style tags.")
 
@@ -80,8 +81,23 @@ def main(
         min=1.0,
         help="Seconds to wait for each Ollama generation request.",
     ),
+    excluded_tags: str | None = typer.Option(
+        None,
+        "--excluded-tags",
+        help="Comma-separated exclusion words (wildcards allowed) replacing the saved list.",
+    ),
+    no_tag_exclusions: bool = typer.Option(
+        False,
+        "--no-tag-exclusions",
+        help="Keep every tag, including the saved exclusion words.",
+    ),
 ) -> None:
     _configure_stdio()
+
+    exclusion_rules = resolve_exclusion_rules(
+        excluded_tags,
+        disabled=no_tag_exclusions,
+    )
 
     if image is not None:
         if input_value or edit:
@@ -106,22 +122,30 @@ def main(
             )
             raise typer.Exit(code=1) from exc
 
-        typer.echo(format_variant(prediction.names, output_format))
+        kept_tags, dropped_tags = split_excluded(
+            prediction.tags,
+            exclusion_rules,
+            key=lambda tag: tag.name,
+        )
+        kept_names = [tag.name for tag in kept_tags]
+
+        typer.echo(format_variant(kept_names, output_format))
         if not prediction.tags:
             typer.secho(
                 "Warning: no tags exceeded the selected confidence thresholds.",
                 fg=typer.colors.YELLOW,
                 err=True,
             )
+        _report_excluded_tags([tag.name for tag in dropped_tags])
         if show_scores:
             typer.echo("")
             typer.echo("confidence:")
-            for tag in prediction.tags:
+            for tag in kept_tags:
                 typer.echo(f"{tag.score:.3f}\t{tag.name}")
             if prediction.rating is not None:
                 typer.echo(f"rating\t{prediction.rating.name} ({prediction.rating.score:.3f})")
         if copy:
-            clipboard_text = format_clipboard_text(prediction.names, output_format)
+            clipboard_text = format_clipboard_text(kept_names, output_format)
             if clipboard_text:
                 _copy_to_clipboard(clipboard_text)
                 typer.secho("Copied inferred tags to clipboard.", fg=typer.colors.GREEN, err=True)
@@ -173,6 +197,7 @@ def main(
                 edit_instruction=edit,
                 tag_subset=reference_tags.tags,
                 max_output_tags=max_output_tags,
+                excluded_tags=exclusion_rules,
             )
         )
     except httpx.HTTPError as exc:
@@ -197,6 +222,7 @@ def main(
         raise typer.Exit(code=1) from exc
 
     unknown_tags = list(result.unknown_tags)
+    excluded_output_tags = list(result.excluded_tags)
 
     for idx, variant in enumerate(result.variants, start=1):
         if len(result.variants) > 1:
@@ -233,20 +259,34 @@ def main(
                         edit_instruction=instruction,
                         tag_subset=reference_tags.tags,
                         max_output_tags=max_output_tags,
+                        excluded_tags=exclusion_rules,
                     )
                 )
                 _extend_unique(unknown_tags, suggestion_result.unknown_tags)
+                _extend_unique(excluded_output_tags, suggestion_result.excluded_tags)
                 if suggestion_result.variants:
                     typer.echo(format_suggestion(suggestion_index, instruction, suggestion_result.variants[0], output_format))
                     if suggestion_index < len(suggestions):
                         typer.echo("")
 
+    _report_excluded_tags(excluded_output_tags)
     if unknown_tags:
         typer.secho(
             f"Warning: unknown tags (not in tag dictionary): {', '.join(unknown_tags)}",
             fg=typer.colors.YELLOW,
             err=True,
         )
+
+
+def _report_excluded_tags(excluded_tags: list[str]) -> None:
+    if not excluded_tags:
+        return
+
+    typer.secho(
+        f"Excluded tags: {', '.join(excluded_tags)}",
+        fg=typer.colors.BLUE,
+        err=True,
+    )
 
 
 def _copy_to_clipboard(text: str) -> None:

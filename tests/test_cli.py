@@ -125,3 +125,64 @@ def test_image_mode_outputs_inferred_tags_without_ollama(tmp_path: Path, monkeyp
 
     assert result.exit_code == 0
     assert result.stdout.strip() == "1girl"
+
+
+def _stub_censored_tagger(monkeypatch: pytest.MonkeyPatch, image_path: Path) -> None:
+    class StubImageTagger:
+        def __init__(self, _model_repo: str) -> None:
+            pass
+
+        def predict(self, path: Path, **_options) -> ImageTagResult:
+            assert path == image_path
+            return ImageTagResult(
+                tags=[
+                    PredictedTag("1girl", 0.99, GENERAL_CATEGORY),
+                    PredictedTag("censored", 0.95, GENERAL_CATEGORY),
+                    PredictedTag("bar_censor", 0.9, GENERAL_CATEGORY),
+                    PredictedTag("rain", 0.85, GENERAL_CATEGORY),
+                ],
+                rating=None,
+            )
+
+    monkeypatch.setattr(cli, "ImageTagger", StubImageTagger)
+
+
+def test_image_mode_drops_excluded_tags_and_reports_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"test placeholder")
+    _stub_censored_tagger(monkeypatch, image_path)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["--image", str(image_path), "--format", "flat", "--show-scores"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0] == "1girl, rain"
+    assert "censored" not in result.stdout
+    assert "Excluded tags: censored, bar_censor" in result.stderr
+
+
+def test_image_mode_exclusion_options_override_the_saved_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"test placeholder")
+    _stub_censored_tagger(monkeypatch, image_path)
+    runner = CliRunner()
+
+    disabled = runner.invoke(
+        cli.app,
+        ["--image", str(image_path), "--format", "flat", "--no-tag-exclusions"],
+    )
+    custom = runner.invoke(
+        cli.app,
+        ["--image", str(image_path), "--format", "flat", "--excluded-tags", "rain"],
+    )
+
+    assert disabled.stdout.strip() == "1girl, censored, bar_censor, rain"
+    assert custom.stdout.strip() == "1girl, censored, bar_censor"

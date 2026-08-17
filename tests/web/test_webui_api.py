@@ -14,31 +14,23 @@ gradio_client = pytest.importorskip("gradio_client")
 from gradio_client import Client, handle_file  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from danbooru_prompt_compiler.web_service import WEB_RUN_FIELDS, WebRunRequest  # noqa: E402
 from tests.webui_harness import running_test_webui  # noqa: E402
 
 
 def _predict(client: Client, image, image_url: str, allow_private: bool):
-    return client.predict(
-        image,
-        image_url,
-        "タグを推測して",
-        "",
-        "qwen3:1.7b",
-        "qwen3:1.7b",
-        "http://127.0.0.1:11434",
-        0.35,
-        0.85,
-        12,
-        1,
-        "",
-        "auto",
-        False,
-        "qwen3-vl:8b",
-        allow_private,
-        True,
-        "simple_background, halftone, *_background, censored, *_censor",
-        api_name="/run_prompt_workbench",
-    )
+    # Built from WebRunRequest so adding a control never breaks this call.
+    values = WebRunRequest(
+        image_url=image_url,
+        instruction="タグを推測して",
+        ollama_url="http://127.0.0.1:11434",
+        max_image_tags=12,
+        variants=1,
+        allow_private_image_urls=allow_private,
+    ).to_values()
+    # The client sends an upload payload where the server sees a resolved path.
+    values[WEB_RUN_FIELDS.index("image_path")] = image
+    return client.predict(*values, api_name="/run_prompt_workbench")
 
 
 def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:

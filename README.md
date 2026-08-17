@@ -75,6 +75,8 @@ Direct image URLs reject private, loopback, and link-local destinations by defau
 
 Tags that reliably lower image quality are dropped from both the inferred image tags and the generated prompts. The default exclusion words are `simple_background, halftone, *_background, censored, *_censor, *_censoring`; `*` matches any characters, so `*_censor` covers `bar_censor` and `mosaic_censoring` is covered by `*_censoring`. Edit the list under `詳細設定 → 除外ワード`, then press `除外ワードを保存` to persist it to `data/excluded_tags.json` and reuse it on the next launch, or `既定に戻す` to restore the defaults. Removed tags are reported in `実行情報` as `Filtered image tags` and `Filtered prompt tags`.
 
+Literal exclusion words are also given to the prompt model as tags it must never output, and exclusions are applied before the output is truncated, so a filtered variant still returns the requested number of tags.
+
 Create a prompt from a natural-language instruction:
 
 ```bash
@@ -167,6 +169,15 @@ uv run danbooru-prompt "1girl" --suggest 3 --model huihui_ai/Qwen3.6-abliterated
 ```
 
 You can also pass a path to an existing text file instead of inline scene text.
+
+The CLI and the Web UI share the same exclusion words, so image tagging and prompt output drop them on both paths. Override the saved list for one run, or keep every tag:
+
+```bash
+uv run danbooru-prompt --image path/to/image.png --excluded-tags "censored, *_censor, monochrome"
+uv run danbooru-prompt --image path/to/image.png --no-tag-exclusions
+```
+
+Removed tags are reported on stderr as `Excluded tags: ...`.
 
 ## Reference Tags
 
