@@ -51,29 +51,15 @@ IMAGE_URL_DROP_JS = r"""
 
     event.preventDefault();
     event.stopPropagation();
-    const routeUrl = (attemptsLeft = 30) => {
-      const field = document.querySelector(
-        "#image-url-input textarea, #image-url-input input"
-      );
-      const button = document.querySelector("#image-url-load-button button");
-      if (!field || !button) {
-        if (attemptsLeft === 30) {
-          document.querySelector("#image-url-accordion button")?.click();
-        }
-        if (attemptsLeft > 0) {
-          setTimeout(() => routeUrl(attemptsLeft - 1), 50);
-        }
-        return;
-      }
-      const prototype = field instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-      field.dispatchEvent(new Event("change", { bubbles: true }));
-      setTimeout(() => button.click(), 100);
-    };
-    routeUrl();
+    const field = document.querySelector(
+      "#dropped-image-url-input textarea, #dropped-image-url-input input"
+    );
+    const button = document.querySelector("#dropped-image-url-button button");
+    if (!field || !button) return;
+    field.value = url;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    setTimeout(() => button.click(), 100);
   }, true);
 }
 """
@@ -221,6 +207,7 @@ def build_app(*, service: WebPromptService | None = None):
             )
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
+        gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
         gr.Markdown(
             "# Danbooru Prompt Workbench\n"
             "画像を置いて日本語で指示するだけで、Danbooru形式のプロンプトを生成します。"
@@ -242,6 +229,16 @@ def build_app(*, service: WebPromptService | None = None):
                     file_types=["image"],
                     type="filepath",
                     visible="hidden",
+                )
+                dropped_image_url_input = gr.Textbox(
+                    elem_id="dropped-image-url-input",
+                    elem_classes="url-drop-bridge",
+                    container=False,
+                )
+                dropped_image_url_button = gr.Button(
+                    "ドロップURLを読み込む",
+                    elem_id="dropped-image-url-button",
+                    elem_classes="url-drop-bridge",
                 )
                 with gr.Accordion(
                     "URLから読み込む（補助）",
@@ -471,6 +468,13 @@ def build_app(*, service: WebPromptService | None = None):
             inputs=[image_url_input, allow_private_image_urls_input],
             outputs=image_url_outputs,
             queue=False,
+        )
+        dropped_image_url_button.click(
+            handle_image_url,
+            inputs=[dropped_image_url_input, allow_private_image_urls_input],
+            outputs=image_url_outputs,
+            queue=False,
+            api_name=False,
         )
         ollama_diagnostic_button.click(
             diagnose_ollama,
