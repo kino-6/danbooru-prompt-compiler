@@ -55,6 +55,25 @@ def split_excluded(
     return kept, excluded
 
 
+def resolve_exclusion_rules(
+    override: str | None = None,
+    *,
+    disabled: bool = False,
+    path: Path = EXCLUDED_TAGS_PATH,
+) -> list[str]:
+    """Rules from an explicit override, else the saved list, else the defaults."""
+    if disabled:
+        return []
+    return parse_exclusion_rules(
+        override if override is not None else load_exclusion_text(path)
+    )
+
+
+def exact_exclusion_rules(rules: Iterable[str]) -> list[str]:
+    """Rules usable as literal tag names, i.e. without wildcard characters."""
+    return [rule for rule in rules if not set(rule) & {"*", "?", "["}]
+
+
 def load_exclusion_text(path: Path = EXCLUDED_TAGS_PATH) -> str:
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))

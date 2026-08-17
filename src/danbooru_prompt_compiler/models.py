@@ -35,11 +35,13 @@ class CompileRequest(BaseModel):
     edit_instruction: str | None = None
     tag_subset: list[str] = Field(default_factory=list)
     max_output_tags: int = Field(default=20, ge=1, le=100)
+    excluded_tags: list[str] = Field(default_factory=list)
 
 
 class CompileResult(BaseModel):
     variants: list[list[str]]
     unknown_tags: list[str]
+    excluded_tags: list[str] = Field(default_factory=list)
 
 
 class LLMRequest(BaseModel):

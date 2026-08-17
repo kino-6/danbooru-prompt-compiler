@@ -6,6 +6,7 @@ from .llm import LLMClient
 from .models import CompileRequest, CompileResult, InputType, LLMRequest
 from .normalizer import normalize_tags, parse_tag_text
 from .tag_dictionary import load_or_fetch_tag_dictionary
+from .tag_filter import exact_exclusion_rules, split_excluded
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 TAG_DICT_PATH = BASE_DIR / "data" / "tags.json"
@@ -62,12 +63,24 @@ class PromptCompiler:
 
         all_variants: list[list[str]] = []
         unknown: list[str] = []
+        excluded: list[str] = []
         for output in llm_response.outputs:
-            normalized = normalize_tags(parse_tag_text(output))[: request.max_output_tags]
+            # Exclusions run before truncation so removed tags do not consume
+            # output slots and shrink the variant below max_output_tags.
+            kept, dropped = split_excluded(
+                normalize_tags(parse_tag_text(output)),
+                request.excluded_tags,
+            )
+            normalized = kept[: request.max_output_tags]
             all_variants.append(normalized)
             unknown.extend(self._unknown_tags(normalized, known_unknown=unknown))
+            excluded.extend(tag for tag in dropped if tag not in excluded)
 
-        return CompileResult(variants=all_variants, unknown_tags=unknown)
+        return CompileResult(
+            variants=all_variants,
+            unknown_tags=unknown,
+            excluded_tags=excluded,
+        )
 
     def build_prompt(self, request: CompileRequest) -> str:
         source_label = "Existing prompt" if request.input_type == InputType.prompt else "Scene"
@@ -79,6 +92,7 @@ class PromptCompiler:
                 f"Mode: {request.mode.value}.",
                 f"Input type: {request.input_type.value}.",
                 f"Output at most {request.max_output_tags} tags.",
+                self._excluded_tags_prompt_text(request.excluded_tags),
                 self._preset_prompt_text(request.preset_name),
                 self._tag_subset_prompt_text(request.tag_subset, max_output_tags=request.max_output_tags),
                 source_text,
@@ -100,6 +114,16 @@ class PromptCompiler:
         preset = self.load_preset(preset_name)
         preferred_tags = ", ".join(preset.get("preferred_tags", []))
         return f"Preset guidance: {preset.get('guidance', '')}\nPreferred tags: {preferred_tags}"
+
+    @staticmethod
+    def _excluded_tags_prompt_text(excluded_tags: list[str]) -> str:
+        # Wildcard rules are left to the deterministic post-filter; only literal
+        # tag names are meaningful instructions for the model.
+        literal_tags = exact_exclusion_rules(excluded_tags)
+        if not literal_tags:
+            return ""
+
+        return f"Never output these tags: {', '.join(literal_tags)}."
 
     @staticmethod
     def _edit_prompt_text(edit_instruction: str | None) -> str:

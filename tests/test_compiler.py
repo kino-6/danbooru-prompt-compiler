@@ -46,6 +46,44 @@ def test_compile_limits_output_tag_count() -> None:
     assert result.variants == [["1girl", "solo", "shrine"]]
 
 
+def test_excluded_tags_do_not_consume_output_slots() -> None:
+    client = FakeLLMClient(["1girl, censored, solo, bar_censor, shrine, rain"])
+    compiler = PromptCompiler(
+        llm_client=client,
+        tag_dictionary={"1girl", "solo", "shrine", "rain"},
+    )
+
+    result = compiler.compile(
+        CompileRequest(
+            scene_description="test",
+            variants=1,
+            max_output_tags=3,
+            excluded_tags=["censored", "*_censor"],
+        )
+    )
+
+    assert result.variants == [["1girl", "solo", "shrine"]]
+    assert result.excluded_tags == ["censored", "bar_censor"]
+
+
+def test_prompt_names_literal_excluded_tags_only() -> None:
+    client = FakeLLMClient(["1girl"])
+    compiler = PromptCompiler(llm_client=client, tag_dictionary={"1girl"})
+
+    compiler.compile(
+        CompileRequest(
+            scene_description="test",
+            variants=1,
+            excluded_tags=["censored", "bar_censor", "*_background"],
+        )
+    )
+
+    assert client.last_request is not None
+    prompt = client.last_request.prompt
+    assert "Never output these tags: censored, bar_censor." in prompt
+    assert "*_background" not in prompt
+
+
 def test_prompt_requests_ascii_english_danbooru_tags() -> None:
     client = FakeLLMClient(["1girl, shrine"])
     compiler = PromptCompiler(llm_client=client, tag_dictionary={"1girl", "shrine"})
