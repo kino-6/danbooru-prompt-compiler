@@ -41,6 +41,8 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             page.get_by_text("画像タグの確認・修正", exact=True).click()
             inferred_tags = page.locator("#inferred-tags-editor textarea")
             expect(inferred_tags).to_have_value("1girl, solo")
+            image_description = page.locator("#image-description-editor textarea")
+            image_description.fill("石段に立つ少女")
             page.get_by_text("既存プロンプトから編集（任意）", exact=True).click()
             base_prompt = page.locator("#base-prompt-input textarea")
             base_prompt.fill("old prompt")
@@ -50,6 +52,7 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             expect(page.locator('#image-workspace img[src*="second.png"]')).to_be_visible()
             expect(page.locator('#image-workspace input[type="file"]')).to_be_attached()
             expect(inferred_tags).to_have_value("")
+            expect(image_description).to_have_value("")
             expect(base_prompt).to_have_value("")
             for index in range(1, 5):
                 expect(page.locator(f"#prompt-output-{index} textarea")).to_have_value("")
@@ -57,6 +60,7 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             page.get_by_role("button", name="実行", exact=True).click()
             expect(inferred_tags).to_have_value("1girl, solo")
             assert service.run_options[-1]["edited_tags"] == ""
+            assert service.run_options[-1]["edited_description"] == ""
             assert service.run_options[-1]["base_prompt"] == ""
             browser.close()
 

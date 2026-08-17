@@ -51,6 +51,43 @@ def test_run_workbench_maps_a_request_onto_outputs_without_gradio() -> None:
     assert stages == ["complete"]
 
 
+def test_run_workbench_returns_the_image_description_for_editing() -> None:
+    class DescribingService(RecordingService):
+        def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
+            result = super().run(image_path=image_path, on_progress=on_progress, **options)
+            return WebRunResult(
+                action_plan=result.action_plan,
+                inferred_tags=result.inferred_tags,
+                output=result.output,
+                status=result.status,
+                candidates=result.candidates,
+                image_description="石段に立つ少女",
+            )
+
+    service = DescribingService()
+
+    outputs = run_workbench(
+        service,
+        WebRunRequest(instruction="夜にして", use_vision=True),
+        [],
+    )
+
+    assert service.options is not None
+    assert service.options["edited_description"] == ""
+    assert outputs.image_description == "石段に立つ少女"
+
+
+def test_run_workbench_keeps_the_edited_description_after_a_failure() -> None:
+    outputs = run_workbench(
+        RecordingService(error=ValueError("画像を入力してください。")),
+        WebRunRequest(instruction="夜にして", edited_description="石段に立つ少女"),
+        [],
+    )
+
+    assert outputs.status.startswith("Error: ")
+    assert outputs.image_description == "石段に立つ少女"
+
+
 def test_run_workbench_turns_failures_into_a_status_and_keeps_history() -> None:
     history = [{"action": "edit", "instruction": "前回", "output": "1girl"}]
 
@@ -97,6 +134,9 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     components = _components_by_label(app)
 
     assert components["画像タグ"]["props"]["interactive"]
+    description_props = components["画像の説明（VLM）"]["props"]
+    assert description_props["interactive"] is True
+    assert description_props["elem_id"] == "image-description-editor"
     action_values = {
         value for _label, value in components["操作種別"]["props"]["choices"]
     }
@@ -184,6 +224,7 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     assert components[run_dependency["inputs"][-1]]["type"] == "state"
     assert input_labels[WEB_RUN_FIELDS.index("instruction")] == "どうしたい？"
     assert input_labels[WEB_RUN_FIELDS.index("variants")] == "出力数"
+    assert input_labels[WEB_RUN_FIELDS.index("edited_description")] == "画像の説明（VLM）"
     assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"

@@ -287,3 +287,27 @@ next-panel action was only reachable through the folded `操作種別` selector.
       keep the tagged character.
 - [x] Chromium E2E proves the button runs from an image alone with an empty instruction.
 - [x] The full test suite and CI pass (102 passed, 1 browser-only skip; 5 Chromium E2E passed).
+
+## Task 22 — Describe the image in natural language with the VLM
+
+The VLM observation was only used for edits and next panels, and was never shown, so it
+could not help when the tagger returns fewer tags than expected or when a detail cannot
+be expressed as a tag.
+
+- [x] Show the description in an editable `画像の説明（VLM）` field for every action.
+- [x] Reuse a hand-written description verbatim instead of calling the VLM again.
+- [x] Write the description without reference to the instruction, and cache it per image
+      and vision model.
+- [x] Keep passing the description to image edits and next panels, and keep it out of
+      prompts compiled from text alone.
+- [x] Report whether the description was generated or cached.
+
+### Gate
+
+- [x] Unit test proves tag extraction now produces a description and that the description
+      prompt ignores the instruction.
+- [x] Unit test proves an edited description skips the VLM and reaches the compiler.
+- [x] Unit test proves a second run with a new instruction reuses the cached description.
+- [x] Unit test proves a text-only prompt never receives the description.
+- [x] Chromium E2E proves the description field is editable and clears with the image.
+- [x] The full test suite and CI pass (107 passed, 1 browser-only skip; 5 Chromium E2E passed).

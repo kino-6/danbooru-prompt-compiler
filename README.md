@@ -71,7 +71,9 @@ An image with no instruction is otherwise routed to plain tag extraction, so the
 
 The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable, and the action selector can override automatic routing. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
 
-For requests that depend on pose, gaze, held objects, or spatial relationships, enable `ポーズ・位置関係の解析にVLMを使う` and configure an Ollama vision model such as `qwen3-vl:8b`. VLM use is opt-in and limited to image edits and next-panel requests. The advanced settings also provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
+For requests that depend on pose, gaze, held objects, or spatial relationships, enable `ポーズ・位置関係の解析にVLMを使う` and configure an Ollama vision model such as `qwen3-vl:8b`. The advanced settings also provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
+
+With the VLM enabled, every run on an image also fills `画像の説明（VLM）` under `画像タグの確認・修正` with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
 
 Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.
 

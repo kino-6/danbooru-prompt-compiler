@@ -113,9 +113,11 @@ class CensoredOutputCompiler(FakeCompiler):
 class FakeVisionClient:
     def __init__(self) -> None:
         self.last_request = None
+        self.calls = 0
 
     def generate(self, request):
         self.last_request = request
+        self.calls += 1
         return LLMResponse(outputs=["少女は右を向き、腰から上の構図"])
 
 
@@ -370,9 +372,107 @@ def test_service_adds_optional_vision_observation_to_image_edit() -> None:
     assert "少女は右を向き" in compiler.last_request.edit_instruction
 
 
-@pytest.mark.parametrize("action", [WebAction.tag_image, WebAction.compile])
-def test_service_skips_vision_for_non_spatial_actions(action: WebAction) -> None:
-    plan = ActionPlan(action=action, scene_description="1girl")
+def test_service_describes_the_image_for_tag_extraction() -> None:
+    plan = ActionPlan(action=WebAction.tag_image, reason="tag it")
+    vision = FakeVisionClient()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        vision_factory=lambda _url, _model: vision,
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="タグを推測して",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+    )
+
+    assert result.image_description == "少女は右を向き、腰から上の構図"
+    assert vision.last_request.image_paths == ["sample.png"]
+    # The description must not depend on the instruction, so one description
+    # serves every action and survives instruction-only re-runs.
+    assert "タグを推測して" not in vision.last_request.prompt
+    assert "Image description: generated" in result.status
+
+
+def test_service_keeps_the_image_description_out_of_a_new_prompt() -> None:
+    plan = ActionPlan(action=WebAction.compile, scene_description="少女")
+    compiler = FakeCompiler()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: compiler,
+        vision_factory=lambda _url, _model: FakeVisionClient(),
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="少女",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+    )
+
+    assert result.image_description == "少女は右を向き、腰から上の構図"
+    assert compiler.last_request.scene_description == "少女"
+    assert compiler.last_request.edit_instruction is None
+
+
+def test_service_reuses_an_edited_description_without_calling_the_vlm() -> None:
+    plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして")
+    compiler = FakeCompiler()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: compiler,
+        vision_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("an edited description must not re-run the VLM")
+        ),
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="夜にして",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+        edited_description="  赤い傘を持った少女が石段に立っている  ",
+    )
+
+    assert result.image_description == "赤い傘を持った少女が石段に立っている"
+    assert "赤い傘を持った少女" in compiler.last_request.edit_instruction
+    assert "Image description:" not in result.status
+
+
+def test_service_caches_the_image_description_across_runs() -> None:
+    plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして")
+    vision = FakeVisionClient()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        vision_factory=lambda _url, _model: vision,
+    )
+    options = dict(
+        image_path="sample.png",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+    )
+
+    first = service.run(instruction="夜にして", **options)
+    second = service.run(instruction="雨にして", **options)
+
+    assert vision.calls == 1
+    assert first.image_description == second.image_description
+    assert "Image description: generated" in first.status
+    assert "Image description: cached" in second.status
+
+
+def test_service_skips_vision_for_non_spatial_actions_without_an_image() -> None:
+    plan = ActionPlan(action=WebAction.compile, scene_description="1girl")
     service = WebPromptService(
         tagger=FakeTagger(),
         router_factory=lambda _url, _model: FixedRouter(plan),
@@ -383,10 +483,9 @@ def test_service_skips_vision_for_non_spatial_actions(action: WebAction) -> None
     )
 
     service.run(
-        image_path="sample.png",
-        instruction="タグを推測して" if action == WebAction.tag_image else "少女",
+        image_path=None,
+        instruction="少女",
         base_prompt="",
-        general_threshold=0.4,
         use_vision=True,
     )
 

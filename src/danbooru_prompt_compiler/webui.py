@@ -197,6 +197,7 @@ class WorkbenchOutputs:
 
     action_plan: dict[str, object]
     inferred_tags: str
+    image_description: str
     prompts: list[str]
     status: str
     candidates: list[str]
@@ -226,6 +227,7 @@ def run_workbench(
         return WorkbenchOutputs(
             action_plan={},
             inferred_tags="",
+            image_description=request.edited_description,
             prompts=blank_prompt_boxes(),
             status="Error: "
             + format_ollama_error(
@@ -249,6 +251,7 @@ def run_workbench(
     return WorkbenchOutputs(
         action_plan=result.action_plan,
         inferred_tags=result.inferred_tags,
+        image_description=result.image_description,
         prompts=prompt_box_values(result.candidates),
         status=result.status,
         candidates=result.candidates,
@@ -283,6 +286,7 @@ def build_app(*, service: WebPromptService | None = None):
         return (
             outputs.action_plan,
             outputs.inferred_tags,
+            outputs.image_description,
             *outputs.prompts,
             outputs.status,
             gr.Radio(
@@ -320,6 +324,7 @@ def build_app(*, service: WebPromptService | None = None):
         outputs = [
             results.action_plan,
             results.inferred_tags,
+            results.image_description,
             *results.prompts,
             results.status,
             results.candidate_selector,
@@ -342,8 +347,9 @@ def build_app(*, service: WebPromptService | None = None):
         )
 
         def cleared_prompt_state(status: str):
-            """Tags, base prompt, outputs, candidates, plan, and status of a fresh image."""
+            """Tags, description, base prompt, outputs, candidates, plan, and status."""
             return (
+                "",
                 "",
                 "",
                 *blank_prompt_boxes(),
@@ -368,6 +374,7 @@ def build_app(*, service: WebPromptService | None = None):
 
         cleared_outputs = [
             results.inferred_tags,
+            results.image_description,
             controls.base_prompt,
             *results.prompts,
             results.candidate_selector,
@@ -466,6 +473,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "max_image_tags": settings.max_image_tags,
         "variants": controls.variants,
         "edited_tags": results.inferred_tags,
+        "edited_description": results.image_description,
         "action_override": settings.action_override,
         "use_vision": settings.use_vision,
         "vision_model": settings.vision_model,
@@ -681,6 +689,18 @@ def _build_result_section(gr) -> SimpleNamespace:
             elem_id="inferred-tags-editor",
             info="必要な場合だけ修正して、もう一度実行してください。",
         )
+        image_description = gr.Textbox(
+            label="画像の説明（VLM）",
+            lines=4,
+            buttons=["copy"],
+            interactive=True,
+            elem_id="image-description-editor",
+            info=(
+                "「ポーズ・位置関係の解析にVLMを使う」を有効にすると自動で入ります。"
+                "タグが少ないときの補足や、細かく指定したいときはここを直接書き換えてください。"
+                "入力があるときはVLMを再実行せず、その内容を使います。"
+            ),
+        )
     prompts = []
     for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
         with gr.Row():
@@ -709,6 +729,7 @@ def _build_result_section(gr) -> SimpleNamespace:
             status = gr.Markdown(label="状態")
     return SimpleNamespace(
         inferred_tags=inferred_tags,
+        image_description=image_description,
         prompts=prompts,
         history_state=history_state,
         candidate_selector=candidate_selector,
