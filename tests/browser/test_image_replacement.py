@@ -107,6 +107,9 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
                 page.goto(url)
                 page.get_by_text("詳細設定", exact=True).click()
                 page.get_by_label("プライベート画像URLを許可").check()
+                page.wait_for_function(
+                    "document.documentElement.dataset.imageUrlDropReady === 'true'"
+                )
                 remote_url = (
                     f"http://127.0.0.1:{image_server.server_port}/remote.png"
                 )

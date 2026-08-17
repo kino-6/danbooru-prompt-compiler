@@ -51,17 +51,28 @@ IMAGE_URL_DROP_JS = r"""
 
     event.preventDefault();
     event.stopPropagation();
-    const field = document.querySelector(
-      "#dropped-image-url-input textarea, #dropped-image-url-input input"
-    );
-    const button = document.querySelector("#dropped-image-url-button button");
-    if (!field || !button) return;
-    const prototype = field instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-    setTimeout(() => button.click(), 0);
+    const routeUrl = (attemptsLeft = 30) => {
+      const field = document.querySelector(
+        "#image-url-input textarea, #image-url-input input"
+      );
+      const button = document.querySelector("#image-url-load-button button");
+      if (!field || !button) {
+        if (attemptsLeft === 30) {
+          document.querySelector("#image-url-accordion button")?.click();
+        }
+        if (attemptsLeft > 0) {
+          requestAnimationFrame(() => routeUrl(attemptsLeft - 1));
+        }
+        return;
+      }
+      const prototype = field instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      setTimeout(() => button.click(), 0);
+    };
+    routeUrl();
   }, true);
 }
 """
@@ -231,16 +242,11 @@ def build_app(*, service: WebPromptService | None = None):
                     type="filepath",
                     visible="hidden",
                 )
-                dropped_image_url_input = gr.Textbox(
-                    visible="hidden",
-                    elem_id="dropped-image-url-input",
-                )
-                dropped_image_url_button = gr.Button(
-                    "ドロップURLを読み込む",
-                    visible="hidden",
-                    elem_id="dropped-image-url-button",
-                )
-                with gr.Accordion("URLから読み込む（補助）", open=False):
+                with gr.Accordion(
+                    "URLから読み込む（補助）",
+                    open=False,
+                    elem_id="image-url-accordion",
+                ):
                     image_url_input = gr.Textbox(
                         label="画像URL",
                         placeholder="https://example.com/image.png",
@@ -462,12 +468,6 @@ def build_app(*, service: WebPromptService | None = None):
         image_url_preview_button.click(
             handle_image_url,
             inputs=[image_url_input, allow_private_image_urls_input],
-            outputs=image_url_outputs,
-            queue=False,
-        )
-        dropped_image_url_button.click(
-            handle_image_url,
-            inputs=[dropped_image_url_input, allow_private_image_urls_input],
             outputs=image_url_outputs,
             queue=False,
         )
