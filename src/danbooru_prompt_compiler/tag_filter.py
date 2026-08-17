@@ -10,12 +10,30 @@ T = TypeVar("T")
 BASE_DIR = Path(__file__).resolve().parents[2]
 EXCLUDED_TAGS_PATH = BASE_DIR / "data" / "excluded_tags.json"
 DEFAULT_EXCLUDED_TAGS: tuple[str, ...] = (
+    # Backgrounds that flatten the illustration.
     "simple_background",
     "halftone",
     "*_background",
-    "censored",
-    "*_censor",
-    "*_censoring",
+    # Every censorship spelling: bar_censor, censored_nipples, mosaic_censoring,
+    # has_censored_revision, and the rest of the family.
+    "*censor*",
+    # Rendered text and overlays, which come out as garbled glyphs.
+    # "*_text" deliberately does not match texture tags such as paper_texture.
+    "*_text",
+    "text_focus",
+    "subtitled",
+    "page_number",
+    "signature",
+    "character_signature",
+    "artist_name",
+    "character_name",
+    "copyright_name",
+    "dated",
+    "web_address",
+    "*watermark*",
+    "*_username",
+    "logo",
+    "*_logo",
 )
 
 

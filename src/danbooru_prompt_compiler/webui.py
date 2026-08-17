@@ -324,7 +324,7 @@ def build_app(*, service: WebPromptService | None = None):
         outputs = [
             results.action_plan,
             results.inferred_tags,
-            results.image_description,
+            image.description,
             *results.prompts,
             results.status,
             results.candidate_selector,
@@ -374,7 +374,7 @@ def build_app(*, service: WebPromptService | None = None):
 
         cleared_outputs = [
             results.inferred_tags,
-            results.image_description,
+            image.description,
             controls.base_prompt,
             *results.prompts,
             results.candidate_selector,
@@ -413,7 +413,7 @@ def build_app(*, service: WebPromptService | None = None):
                 settings.router_model,
                 settings.compiler_model,
                 settings.vision_model,
-                settings.use_vision,
+                image.use_vision,
             ],
             outputs=settings.diagnostic_output,
             queue=False,
@@ -473,9 +473,9 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "max_image_tags": settings.max_image_tags,
         "variants": controls.variants,
         "edited_tags": results.inferred_tags,
-        "edited_description": results.image_description,
+        "edited_description": image.description,
         "action_override": settings.action_override,
-        "use_vision": settings.use_vision,
+        "use_vision": image.use_vision,
         "vision_model": settings.vision_model,
         "allow_private_image_urls": settings.allow_private_image_urls,
         "apply_tag_exclusions": settings.apply_tag_exclusions,
@@ -533,6 +533,23 @@ def _build_image_column(gr) -> SimpleNamespace:
             gr.Markdown(
                 "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
             )
+        use_vision = gr.Checkbox(
+            value=False,
+            label="VLMで画像を説明する",
+            info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
+        )
+        description = gr.Textbox(
+            label="画像の説明（VLM）",
+            lines=4,
+            buttons=["copy"],
+            interactive=True,
+            elem_id="image-description-editor",
+            placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
+            info=(
+                "タグが少ないときの補足に使えます。"
+                "直接書き換えるとVLMを再実行せず、その内容をそのまま使います。"
+            ),
+        )
     return SimpleNamespace(
         workspace=workspace,
         active_file=active_file,
@@ -540,6 +557,8 @@ def _build_image_column(gr) -> SimpleNamespace:
         dropped_url_button=dropped_url_button,
         url_input=url_input,
         url_button=url_button,
+        use_vision=use_vision,
+        description=description,
     )
 
 
@@ -605,10 +624,6 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 value=DEFAULT_VISION_MODEL,
                 label="VLMモデル",
             )
-            use_vision = gr.Checkbox(
-                value=False,
-                label="ポーズ・位置関係の解析にVLMを使う",
-            )
             allow_private_image_urls = gr.Checkbox(
                 value=False,
                 label="プライベート画像URLを許可",
@@ -648,7 +663,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 elem_id="excluded-tags-input",
                 info=(
                     "画像タグと出力プロンプトの両方から取り除きます。"
-                    "例: censored, bar_censor, *_censor, *_background"
+                    "例: *censor*, *_text, watermark, *_background"
                 ),
             )
             with gr.Row():
@@ -656,13 +671,14 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 reset_excluded_tags_button = gr.Button("既定に戻す")
             excluded_tags_status = gr.Markdown(
                 "保存すると次回起動時もこの除外ワードを使います。"
+                "保存済みの内容は既定より優先されるので、"
+                "更新された既定を取り込むときは「既定に戻す」を押してください。"
             )
     return SimpleNamespace(
         router_model=router_model,
         compiler_model=compiler_model,
         ollama_url=ollama_url,
         vision_model=vision_model,
-        use_vision=use_vision,
         allow_private_image_urls=allow_private_image_urls,
         action_override=action_override,
         diagnostic_button=diagnostic_button,
@@ -688,18 +704,6 @@ def _build_result_section(gr) -> SimpleNamespace:
             interactive=True,
             elem_id="inferred-tags-editor",
             info="必要な場合だけ修正して、もう一度実行してください。",
-        )
-        image_description = gr.Textbox(
-            label="画像の説明（VLM）",
-            lines=4,
-            buttons=["copy"],
-            interactive=True,
-            elem_id="image-description-editor",
-            info=(
-                "「ポーズ・位置関係の解析にVLMを使う」を有効にすると自動で入ります。"
-                "タグが少ないときの補足や、細かく指定したいときはここを直接書き換えてください。"
-                "入力があるときはVLMを再実行せず、その内容を使います。"
-            ),
         )
     prompts = []
     for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
@@ -729,7 +733,6 @@ def _build_result_section(gr) -> SimpleNamespace:
             status = gr.Markdown(label="状態")
     return SimpleNamespace(
         inferred_tags=inferred_tags,
-        image_description=image_description,
         prompts=prompts,
         history_state=history_state,
         candidate_selector=candidate_selector,

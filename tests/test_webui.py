@@ -141,7 +141,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
         value for _label, value in components["操作種別"]["props"]["choices"]
     }
     assert action_values == {"auto", "tag_image", "compile", "edit", "next_panel"}
-    assert components["ポーズ・位置関係の解析にVLMを使う"]["props"]["value"] is False
+    assert components["VLMで画像を説明する"]["props"]["value"] is False
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload"]
@@ -171,6 +171,51 @@ def test_drop_acceptance_keeps_active_path_and_clears_url() -> None:
 
     assert active == "C:/images/second.png"
     assert image_url == ""
+
+
+def _folded_ancestor_labels(app, elem_id: str) -> list[str]:
+    """Labels of the collapsed accordions a component is nested inside."""
+    components = {component["id"]: component for component in app.config["components"]}
+    target = next(
+        component_id
+        for component_id, component in components.items()
+        if component.get("props", {}).get("elem_id") == elem_id
+    )
+
+    def walk(node, ancestors):
+        if node.get("id") == target:
+            return ancestors
+        for child in node.get("children", []):
+            component = components.get(node.get("id"), {})
+            found = walk(
+                child,
+                [*ancestors, component] if component.get("type") == "accordion" else ancestors,
+            )
+            if found is not None:
+                return found
+        return None
+
+    ancestors = walk(app.config["layout"], []) or []
+    return [
+        ancestor["props"].get("label")
+        for ancestor in ancestors
+        if ancestor["props"].get("open") is False
+    ]
+
+
+def test_vision_controls_are_visible_without_opening_a_section() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    # Self-check: the helper does detect a component inside a folded section.
+    assert _folded_ancestor_labels(app, "base-prompt-input") == [
+        "既存プロンプトから編集（任意）"
+    ]
+    # The description is worthless if the switch that fills it, or the box it
+    # lands in, is hidden inside a collapsed section.
+    assert _folded_ancestor_labels(app, "image-description-editor") == []
+    assert components["VLMで画像を説明する"]["props"]["value"] is False
+    assert components["画像の説明（VLM）"]["props"]["interactive"] is True
 
 
 def test_secondary_webui_sections_are_folded() -> None:

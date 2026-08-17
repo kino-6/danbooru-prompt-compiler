@@ -37,12 +37,18 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
 
             file_input.set_input_files(str(first))
             expect(page.locator('#image-workspace img[src*="first.png"]')).to_be_visible()
+
+            # The VLM switch and its description must be usable without
+            # opening any collapsed section.
+            image_description = page.locator("#image-description-editor textarea")
+            expect(image_description).to_be_visible()
+            expect(page.get_by_label("VLMで画像を説明する")).to_be_visible()
+            image_description.fill("石段に立つ少女")
+
             page.get_by_role("button", name="実行", exact=True).click()
             page.get_by_text("画像タグの確認・修正", exact=True).click()
             inferred_tags = page.locator("#inferred-tags-editor textarea")
             expect(inferred_tags).to_have_value("1girl, solo")
-            image_description = page.locator("#image-description-editor textarea")
-            image_description.fill("石段に立つ少女")
             page.get_by_text("既存プロンプトから編集（任意）", exact=True).click()
             base_prompt = page.locator("#base-prompt-input textarea")
             base_prompt.fill("old prompt")

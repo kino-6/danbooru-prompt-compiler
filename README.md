@@ -71,13 +71,21 @@ An image with no instruction is otherwise routed to plain tag extraction, so the
 
 The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable, and the action selector can override automatic routing. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
 
-For requests that depend on pose, gaze, held objects, or spatial relationships, enable `ポーズ・位置関係の解析にVLMを使う` and configure an Ollama vision model such as `qwen3-vl:8b`. The advanced settings also provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
+Enable `VLMで画像を説明する` under the image workspace and configure an Ollama vision model such as `qwen3-vl:8b` in the advanced settings. It also drives the pose, gaze, held-object, and spatial analysis used by image edits and next-panel requests. The advanced settings provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
 
-With the VLM enabled, every run on an image also fills `画像の説明（VLM）` under `画像タグの確認・修正` with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
+With the VLM enabled, every run on an image fills the `画像の説明（VLM）` box under the image with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
 
 Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.
 
-Tags that reliably lower image quality are dropped from both the inferred image tags and the generated prompts. The default exclusion words are `simple_background, halftone, *_background, censored, *_censor, *_censoring`; `*` matches any characters, so `*_censor` covers `bar_censor` and `mosaic_censoring` is covered by `*_censoring`. Edit the list under `詳細設定 → 除外ワード`, then press `除外ワードを保存` to persist it to `data/excluded_tags.json` and reuse it on the next launch, or `既定に戻す` to restore the defaults. Removed tags are reported in `実行情報` as `Filtered image tags` and `Filtered prompt tags`.
+Tags that reliably lower image quality are dropped from both the inferred image tags and the generated prompts. `*` matches any characters, and the defaults cover three groups:
+
+- flattened backgrounds: `simple_background`, `halftone`, `*_background`
+- every censorship spelling: `*censor*` (`bar_censor`, `censored_nipples`, `mosaic_censoring`, …)
+- rendered text and overlays: `*_text`, `text_focus`, `subtitled`, `page_number`, `signature`, `character_signature`, `artist_name`, `character_name`, `copyright_name`, `dated`, `web_address`, `*watermark*`, `*_username`, `logo`, `*_logo`
+
+`*_text` deliberately does not match texture tags such as `paper_texture`, and `speech_bubble` is not excluded because panel work often wants it.
+
+Edit the list under `詳細設定 → 除外ワード`, then press `除外ワードを保存` to persist it to `data/excluded_tags.json` and reuse it on the next launch. A saved file takes precedence over the defaults, so press `既定に戻す` after upgrading to pick up newly added default rules. Removed tags are reported in `実行情報` as `Filtered image tags` and `Filtered prompt tags`.
 
 Literal exclusion words are also given to the prompt model as tags it must never output, and exclusions are applied before the output is truncated, so a filtered variant still returns the requested number of tags.
 
