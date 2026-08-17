@@ -125,7 +125,9 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
                     "drop",
                     {"dataTransfer": data_transfer},
                 )
-                expect(page.get_by_label("画像URL")).to_have_value(remote_url)
+                expect(
+                    page.get_by_role("textbox", name="画像URL", exact=True)
+                ).to_have_value(remote_url)
                 page.get_by_text("実行情報", exact=True).click()
                 expect(page.get_by_text("URL画像を読み込みました。", exact=True)).to_be_visible()
                 page.get_by_role("button", name="実行", exact=True).click()
