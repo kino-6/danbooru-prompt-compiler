@@ -23,6 +23,42 @@ PROGRESS_LABELS = {
 }
 MAX_HISTORY_ITEMS = 20
 MAX_OUTPUT_VARIANTS = 4
+IMAGE_URL_DROP_JS = r"""
+() => {
+  const zone = document.getElementById("image-workspace");
+  if (!zone || zone.dataset.urlDropReady === "true") return;
+  zone.dataset.urlDropReady = "true";
+
+  zone.addEventListener("dragover", (event) => {
+    const types = Array.from(event.dataTransfer?.types || []);
+    if (!types.includes("Files")) event.preventDefault();
+  });
+  zone.addEventListener("drop", (event) => {
+    if (event.dataTransfer?.files?.length) return;
+    const uriList = event.dataTransfer?.getData("text/uri-list") || "";
+    const plainText = event.dataTransfer?.getData("text/plain") || "";
+    const html = event.dataTransfer?.getData("text/html") || "";
+    const htmlUrl = html.match(/<img[^>]+src=["']([^"']+)/i)?.[1] || "";
+    const listedUrl = uriList
+      .split(/\r?\n/)
+      .find((line) => line && !line.startsWith("#"));
+    const url = (listedUrl || htmlUrl || plainText).trim();
+    if (!/^https?:\/\//i.test(url)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const field = document.querySelector("#image-url-input textarea, #image-url-input input");
+    const button = document.querySelector("#image-url-load-button button");
+    if (!field || !button) return;
+    const prototype = field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value").set.call(field, url);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    setTimeout(() => button.click(), 0);
+  });
+}
+"""
 
 
 def prepend_history(
@@ -51,11 +87,7 @@ def prompt_box_values(candidates: list[str]) -> list[str]:
 
 
 def accept_dropped_image(image_path: str | None):
-    if not image_path:
-        return None, None, "", None
-    from pathlib import Path
-
-    return image_path, image_path, Path(image_path).name, None
+    return image_path or None, ""
 
 
 def preview_image_url(image_url: str, allow_private_hosts: bool):
@@ -173,16 +205,19 @@ def build_app(*, service: WebPromptService | None = None):
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.Markdown(
             "# Danbooru Prompt Workbench\n"
-            "画像と日本語の指示を渡すと、軽量LLMが操作を分解して既存機能を呼び出します。"
+            "画像を置いて日本語で指示するだけで、Danbooru形式のプロンプトを生成します。"
         )
         with gr.Row():
             with gr.Column():
-                image_drop_input = gr.File(
-                    file_count="single",
-                    file_types=["image"],
+                image_workspace = gr.Image(
                     type="filepath",
-                    label="画像をドロップ（常にここから置換できます）",
-                    height=120,
+                    sources=["upload", "clipboard"],
+                    label="画像",
+                    placeholder="ここへ画像をドロップ、クリックして選択、または貼り付け",
+                    height=400,
+                    interactive=True,
+                    elem_id="image-workspace",
+                    buttons=["fullscreen"],
                 )
                 active_image_input = gr.File(
                     file_count="single",
@@ -190,45 +225,33 @@ def build_app(*, service: WebPromptService | None = None):
                     type="filepath",
                     visible="hidden",
                 )
-                selected_image_name = gr.Textbox(
-                    label="選択中画像",
-                    interactive=False,
-                )
-                image_preview = gr.Image(
-                    label="現在の画像",
-                    height=300,
-                    interactive=False,
-                )
-                with gr.Row():
+                with gr.Accordion("URLから読み込む（補助）", open=False):
                     image_url_input = gr.Textbox(
-                        label="画像URL（アップロードなしの場合）",
+                        label="画像URL",
                         placeholder="https://example.com/image.png",
+                        elem_id="image-url-input",
                     )
-                    image_url_preview_button = gr.Button("URLをプレビュー")
+                    image_url_preview_button = gr.Button(
+                        "URLを読み込む",
+                        elem_id="image-url-load-button",
+                    )
+                    gr.Markdown(
+                        "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
+                    )
             with gr.Column():
                 instruction_input = gr.Textbox(
                     label="どうしたい？",
                     placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
                     lines=5,
                 )
-                base_prompt_input = gr.Textbox(
-                    label="既存プロンプト（任意）",
-                    placeholder="画像の代わりに既存タグを編集するときに入力",
-                    lines=4,
-                    elem_id="base-prompt-input",
-                )
-                with gr.Row():
-                    action_override_input = gr.Dropdown(
-                        choices=[
-                            ("自動判定", "auto"),
-                            ("画像タグ抽出", "tag_image"),
-                            ("新規プロンプト", "compile"),
-                            ("既存プロンプト編集", "edit"),
-                            ("次のコマ", "next_panel"),
-                        ],
-                        value="auto",
-                        label="操作種別",
+                with gr.Accordion("既存プロンプトから編集（任意）", open=False):
+                    base_prompt_input = gr.Textbox(
+                        label="既存プロンプト",
+                        placeholder="画像の代わりに既存タグを編集するときに入力",
+                        lines=4,
+                        elem_id="base-prompt-input",
                     )
+                with gr.Row():
                     variants_input = gr.Radio(
                         choices=[1, 2, 3, 4],
                         value=4,
@@ -264,6 +287,17 @@ def build_app(*, service: WebPromptService | None = None):
                     value=False,
                     label="プライベート画像URLを許可",
                 )
+            action_override_input = gr.Dropdown(
+                choices=[
+                    ("自動判定", "auto"),
+                    ("画像タグ抽出", "tag_image"),
+                    ("新規プロンプト", "compile"),
+                    ("既存プロンプト編集", "edit"),
+                    ("次のコマ", "next_panel"),
+                ],
+                value="auto",
+                label="操作種別",
+            )
             ollama_diagnostic_button = gr.Button("Ollama接続確認")
             ollama_diagnostic_output = gr.Markdown(label="Ollama診断")
             with gr.Row():
@@ -288,16 +322,15 @@ def build_app(*, service: WebPromptService | None = None):
                     info="例: simple_background, halftone, *_background",
                 )
 
-        with gr.Row():
-            action_plan_output = gr.JSON(label="実行計画")
-            status_output = gr.Markdown(label="状態")
-        inferred_tags_editor = gr.Textbox(
-            label="画像タグ（修正して再実行できます）",
-            lines=4,
-            buttons=["copy"],
-            interactive=True,
-            elem_id="inferred-tags-editor",
-        )
+        with gr.Accordion("画像タグの確認・修正", open=False):
+            inferred_tags_editor = gr.Textbox(
+                label="画像タグ",
+                lines=4,
+                buttons=["copy"],
+                interactive=True,
+                elem_id="inferred-tags-editor",
+                info="必要な場合だけ修正して、もう一度実行してください。",
+            )
         prompt_outputs = []
         for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
             with gr.Row():
@@ -311,14 +344,19 @@ def build_app(*, service: WebPromptService | None = None):
                             elem_id=f"prompt-output-{index + 1}",
                         )
                     )
-        with gr.Row():
-            candidate_selector = gr.Radio(
-                choices=[],
-                label="生成候補",
-            )
-            adopt_button = gr.Button("選択候補を採用")
         history_state = gr.State([])
-        history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
+        with gr.Accordion("候補の採用・履歴", open=False):
+            with gr.Row():
+                candidate_selector = gr.Radio(
+                    choices=[],
+                    label="生成候補",
+                )
+                adopt_button = gr.Button("選択候補を採用")
+            history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
+        with gr.Accordion("実行情報", open=False):
+            with gr.Row():
+                action_plan_output = gr.JSON(label="実行計画")
+                status_output = gr.Markdown(label="状態")
 
         inputs = [
             active_image_input,
@@ -357,6 +395,7 @@ def build_app(*, service: WebPromptService | None = None):
             api_name="run_prompt_workbench",
             concurrency_limit=1,
         )
+
         def handle_image_upload(image_path):
             return (
                 *accept_dropped_image(image_path),
@@ -368,14 +407,24 @@ def build_app(*, service: WebPromptService | None = None):
                 "",
             )
 
-        image_drop_input.upload(
+        def handle_image_url(image_url, allow_private_hosts):
+            return (
+                preview_image_url(image_url, allow_private_hosts),
+                None,
+                "",
+                "",
+                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
+                gr.Radio(choices=[], value=None),
+                {},
+                "URL画像を読み込みました。",
+            )
+
+        image_workspace.input(
             handle_image_upload,
-            inputs=image_drop_input,
+            inputs=image_workspace,
             outputs=[
                 active_image_input,
-                image_preview,
-                selected_image_name,
-                image_drop_input,
+                image_url_input,
                 inferred_tags_editor,
                 base_prompt_input,
                 *prompt_outputs,
@@ -386,9 +435,18 @@ def build_app(*, service: WebPromptService | None = None):
             queue=False,
         )
         image_url_preview_button.click(
-            preview_image_url,
+            handle_image_url,
             inputs=[image_url_input, allow_private_image_urls_input],
-            outputs=image_preview,
+            outputs=[
+                image_workspace,
+                active_image_input,
+                inferred_tags_editor,
+                base_prompt_input,
+                *prompt_outputs,
+                candidate_selector,
+                action_plan_output,
+                status_output,
+            ],
             queue=False,
         )
         ollama_diagnostic_button.click(
@@ -420,6 +478,12 @@ def build_app(*, service: WebPromptService | None = None):
             fn=None,
             cancels=[run_event, submit_event],
             queue=False,
+        )
+        demo.load(
+            fn=None,
+            js=IMAGE_URL_DROP_JS,
+            queue=False,
+            api_name=False,
         )
 
     return demo

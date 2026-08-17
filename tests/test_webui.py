@@ -26,14 +26,15 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     app = build_app()
     components = _components_by_label(app)
 
-    assert components["画像タグ（修正して再実行できます）"]["props"]["interactive"]
+    assert components["画像タグ"]["props"]["interactive"]
     action_values = {
         value for _label, value in components["操作種別"]["props"]["choices"]
     }
     assert action_values == {"auto", "tag_image", "compile", "edit", "next_panel"}
     assert components["ポーズ・位置関係の解析にVLMを使う"]["props"]["value"] is False
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
-    assert "選択中画像" in components
+    assert components["画像"]["props"]["interactive"] is True
+    assert components["画像"]["props"]["sources"] == ["upload", "clipboard"]
     assert components["出力数"]["props"]["value"] == 4
     assert components["不要な画像タグを除外"]["props"]["value"] is True
     assert (
@@ -55,13 +56,42 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     ]
 
 
-def test_drop_acceptance_keeps_active_path_and_resets_drop_zone() -> None:
-    active, preview, name, drop_zone = accept_dropped_image("C:/images/second.png")
+def test_drop_acceptance_keeps_active_path_and_clears_url() -> None:
+    active, image_url = accept_dropped_image("C:/images/second.png")
 
     assert active == "C:/images/second.png"
-    assert preview == "C:/images/second.png"
-    assert name == "second.png"
-    assert drop_zone is None
+    assert image_url == ""
+
+
+def test_secondary_webui_sections_are_folded() -> None:
+    app = build_app()
+    accordions = {
+        component["props"]["label"]: component["props"]["open"]
+        for component in app.config["components"]
+        if component.get("type") == "accordion"
+    }
+
+    assert accordions["URLから読み込む（補助）"] is False
+    assert accordions["既存プロンプトから編集（任意）"] is False
+    assert accordions["詳細設定"] is False
+    assert accordions["画像タグの確認・修正"] is False
+    assert accordions["候補の採用・履歴"] is False
+    assert accordions["実行情報"] is False
+
+
+def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:
+    app = build_app()
+    url_drop_dependencies = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if "text/uri-list" in (dependency.get("js") or "")
+    ]
+
+    assert len(url_drop_dependencies) == 1
+    script = url_drop_dependencies[0]["js"]
+    assert 'document.getElementById("image-workspace")' in script
+    assert 'querySelector("#image-url-input textarea' in script
+    assert 'querySelector("#image-url-load-button button")' in script
 
 
 def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:

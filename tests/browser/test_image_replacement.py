@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import functools
 import os
+import threading
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -28,21 +31,21 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             browser = playwright.chromium.launch()
             page = browser.new_page()
             page.goto(url)
-            file_input = page.locator('input[type="file"]').first
+            file_input = page.locator('#image-workspace input[type="file"]')
 
             file_input.set_input_files(str(first))
-            selected_name = page.get_by_label("選択中画像")
-            expect(selected_name).to_have_value("first.png")
+            expect(page.locator('#image-workspace img[src*="first.png"]')).to_be_visible()
             page.get_by_role("button", name="実行", exact=True).click()
             inferred_tags = page.locator("#inferred-tags-editor textarea")
             expect(inferred_tags).to_have_value("1girl, solo")
+            page.get_by_text("既存プロンプトから編集（任意）", exact=True).click()
             base_prompt = page.locator("#base-prompt-input textarea")
             base_prompt.fill("old prompt")
             expect(page.locator("#prompt-output-1 textarea")).not_to_have_value("")
 
-            page.locator('input[type="file"]').first.set_input_files(str(second))
-            expect(selected_name).to_have_value("second.png")
-            expect(page.locator('input[type="file"]').first).to_be_attached()
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(second))
+            expect(page.locator('#image-workspace img[src*="second.png"]')).to_be_visible()
+            expect(page.locator('#image-workspace input[type="file"]')).to_be_attached()
             expect(inferred_tags).to_have_value("")
             expect(base_prompt).to_have_value("")
             for index in range(1, 5):
@@ -85,3 +88,47 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             expect(fourth).to_be_editable()
             expect(fourth).to_have_value("")
             browser.close()
+
+
+def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
+    image = tmp_path / "remote.png"
+    Image.new("RGB", (4, 4), "green").save(image)
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    image_server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    image_thread = threading.Thread(target=image_server.serve_forever, daemon=True)
+    image_thread.start()
+
+    try:
+        with running_test_webui() as (url, service):
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch()
+                page = browser.new_page()
+                page.goto(url)
+                page.get_by_text("詳細設定", exact=True).click()
+                page.get_by_label("プライベート画像URLを許可").check()
+                remote_url = (
+                    f"http://127.0.0.1:{image_server.server_port}/remote.png"
+                )
+                data_transfer = page.evaluate_handle(
+                    """url => {
+                        const value = new DataTransfer();
+                        value.setData("text/uri-list", url);
+                        return value;
+                    }""",
+                    remote_url,
+                )
+                page.locator("#image-workspace").dispatch_event(
+                    "drop",
+                    {"dataTransfer": data_transfer},
+                )
+                page.get_by_text("実行情報", exact=True).click()
+                expect(page.get_by_text("URL画像を読み込みました。", exact=True)).to_be_visible()
+                page.get_by_role("button", name="実行", exact=True).click()
+                expect(page.locator("#inferred-tags-editor textarea")).to_have_value(
+                    "1girl, solo"
+                )
+                assert service.image_digests[-1] is not None
+                browser.close()
+    finally:
+        image_server.shutdown()
+        image_server.server_close()
