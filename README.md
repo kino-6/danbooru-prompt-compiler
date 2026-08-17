@@ -67,6 +67,8 @@ Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an
 
 The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes the current image, then the text model proposes the next prompt while preserving requested elements. It does not yet inspect spatial relationships with a vision-language model.
 
+An image with no instruction is otherwise routed to plain tag extraction, so the main controls carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and the character, appearance, and clothing tags are preserved into every proposal.
+
 The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable, and the action selector can override automatic routing. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
 
 For requests that depend on pose, gaze, held objects, or spatial relationships, enable `ポーズ・位置関係の解析にVLMを使う` and configure an Ollama vision model such as `qwen3-vl:8b`. VLM use is opt-in and limited to image edits and next-panel requests. The advanced settings also provide an Ollama connection check that reports missing models with exact `ollama pull` commands.

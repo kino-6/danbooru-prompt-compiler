@@ -264,16 +264,19 @@ def build_app(*, service: WebPromptService | None = None):
 
     prompt_service = service or WebPromptService()
 
-    def handle_request(*values, progress=gr.Progress()):
+    def dispatch(values, progress, *, action_override: str | None = None):
         """Gradio adapter: ordered values in, Gradio component updates out."""
         *run_values, history = values
+        request = WebRunRequest.from_values(run_values)
+        if action_override is not None:
+            request = request.model_copy(update={"action_override": action_override})
 
         def report_progress(stage: str, fraction: float) -> None:
             progress(fraction, desc=PROGRESS_LABELS.get(stage, stage))
 
         outputs = run_workbench(
             prompt_service,
-            WebRunRequest.from_values(run_values),
+            request,
             history,
             on_progress=report_progress,
         )
@@ -289,6 +292,14 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.history,
             outputs.history,
         )
+
+    def handle_request(*values, progress=gr.Progress()):
+        return dispatch(values, progress)
+
+    def handle_next_panel(*values, progress=gr.Progress()):
+        # An image alone is enough here; the router would otherwise read a
+        # missing instruction as a request for plain tag extraction.
+        return dispatch(values, progress, action_override="next_panel")
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
@@ -320,6 +331,13 @@ def build_app(*, service: WebPromptService | None = None):
             inputs=inputs,
             outputs=outputs,
             api_name="run_prompt_workbench",
+            concurrency_limit=1,
+        )
+        next_panel_event = controls.next_panel_button.click(
+            handle_next_panel,
+            inputs=inputs,
+            outputs=outputs,
+            api_name="run_next_panel",
             concurrency_limit=1,
         )
 
@@ -420,7 +438,7 @@ def build_app(*, service: WebPromptService | None = None):
         )
         controls.cancel_button.click(
             fn=None,
-            cancels=[run_event, submit_event],
+            cancels=[run_event, next_panel_event, submit_event],
             queue=False,
         )
         demo.load(
@@ -540,12 +558,21 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
+            next_panel_button = gr.Button(
+                "次のコマ",
+                elem_id="next-panel-button",
+            )
             cancel_button = gr.Button("停止", variant="stop")
+        gr.Markdown(
+            "「次のコマ」は指示がなくても押せます。画像だけを置いて押すと、"
+            "一瞬後の場面を提案します。"
+        )
     return SimpleNamespace(
         instruction=instruction,
         base_prompt=base_prompt,
         variants=variants,
         run_button=run_button,
+        next_panel_button=next_panel_button,
         cancel_button=cancel_button,
     )
 

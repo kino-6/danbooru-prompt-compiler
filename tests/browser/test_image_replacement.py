@@ -93,6 +93,26 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             browser.close()
 
 
+def test_next_panel_button_runs_from_an_image_alone(tmp_path) -> None:
+    image = tmp_path / "panel.png"
+    Image.new("RGB", (4, 4), "orange").save(image)
+
+    with running_test_webui() as (url, service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
+            expect(page.locator('#image-workspace img[src*="panel.png"]')).to_be_visible()
+
+            page.get_by_role("button", name="次のコマ", exact=True).click()
+            expect(page.locator("#prompt-output-1 textarea")).not_to_have_value("")
+
+            assert service.run_options[-1]["action_override"] == "next_panel"
+            assert service.run_options[-1]["instruction"] == ""
+            browser.close()
+
+
 def test_clipboard_image_can_be_pasted_into_image_workspace(tmp_path) -> None:
     image = tmp_path / "pasted.png"
     Image.new("RGB", (4, 4), "purple").save(image)

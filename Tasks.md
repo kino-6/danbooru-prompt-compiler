@@ -269,3 +269,21 @@ so component changes cannot be unit tested without building the whole app.
 - [x] Unit tests exercise `run_workbench` success and failure without constructing a Gradio app.
 - [x] Existing Web UI unit, API, and browser tests pass unchanged.
 - [x] The full test suite and CI pass (100 passed, 1 browser-only skip; 4 Chromium E2E passed).
+
+## Task 21 — Run the next panel from an image alone
+
+An image with no instruction hits the strong routing rule for tag extraction, so the
+next-panel action was only reachable through the folded `操作種別` selector.
+
+- [x] Add a `次のコマ` button beside `実行` in the main controls.
+- [x] Force the next-panel action for that button regardless of the routing rules.
+- [x] Cancel the next-panel run with the existing stop button.
+
+### Gate
+
+- [x] Unit test proves the next-panel trigger shares the run inputs and outputs.
+- [x] Unit test proves the stop button cancels every run trigger.
+- [x] Service test proves an image with no instruction produces next-panel variants that
+      keep the tagged character.
+- [x] Chromium E2E proves the button runs from an image alone with an empty instruction.
+- [x] The full test suite and CI pass (102 passed, 1 browser-only skip; 5 Chromium E2E passed).
