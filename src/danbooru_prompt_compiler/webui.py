@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 from .image_source import load_image_url_preview, resolve_image_source
 from .ollama_diagnostics import check_ollama, format_ollama_error
+from .tag_filter import (
+    DEFAULT_EXCLUSION_TEXT,
+    EXCLUDED_TAGS_PATH,
+    load_exclusion_text,
+    save_exclusion_text,
+)
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
-    DEFAULT_IMAGE_TAG_FILTER,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_VISION_MODEL,
     WebPromptService,
@@ -23,13 +30,49 @@ PROGRESS_LABELS = {
 }
 MAX_HISTORY_ITEMS = 20
 MAX_OUTPUT_VARIANTS = 4
-IMAGE_URL_DROP_JS = r"""
+IMAGE_INPUT_JS = r"""
 () => {
   if (document.documentElement.dataset.imageUrlDropReady === "true") return;
   document.documentElement.dataset.imageUrlDropReady = "true";
 
   const isImageWorkspace = (event) =>
     event.target instanceof Element && event.target.closest("#image-workspace");
+
+  const loadImageUrl = (url) => {
+    const field = document.querySelector(
+      "#dropped-image-url-input textarea, #dropped-image-url-input input"
+    );
+    const button = document.querySelector(
+      "button#dropped-image-url-button, #dropped-image-url-button button"
+    );
+    if (!field || !button) return false;
+    field.value = url;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    setTimeout(() => button.click(), 100);
+    return true;
+  };
+
+  const loadImageFile = (file) => {
+    const input = document.querySelector('#image-workspace input[type="file"]');
+    if (!input || !file) return false;
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File([file], file.name || "clipboard.png", {
+        type: file.type || "image/png",
+      })
+    );
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  };
+
+  const isTextEntry = (element) =>
+    element instanceof Element &&
+    (element.isContentEditable ||
+      element.tagName === "TEXTAREA" ||
+      element.tagName === "INPUT");
 
   document.addEventListener("dragover", (event) => {
     if (!isImageWorkspace(event)) return;
@@ -51,17 +94,26 @@ IMAGE_URL_DROP_JS = r"""
 
     event.preventDefault();
     event.stopPropagation();
-    const field = document.querySelector(
-      "#dropped-image-url-input textarea, #dropped-image-url-input input"
+    loadImageUrl(url);
+  }, true);
+  document.addEventListener("paste", (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const pastedText = (event.clipboardData?.getData("text/plain") || "").trim();
+    const imageItem = items.find(
+      (item) => item.kind === "file" && (item.type || "").startsWith("image/")
     );
-    const button = document.querySelector(
-      "button#dropped-image-url-button, #dropped-image-url-button button"
-    );
-    if (!field || !button) return;
-    field.value = url;
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-    field.dispatchEvent(new Event("change", { bubbles: true }));
-    setTimeout(() => button.click(), 100);
+    if (imageItem) {
+      if (pastedText && isTextEntry(document.activeElement)) return;
+      if (!loadImageFile(imageItem.getAsFile())) return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (!isImageWorkspace(event)) return;
+    if (!/^https?:\/\//i.test(pastedText)) return;
+    if (!loadImageUrl(pastedText)) return;
+    event.preventDefault();
+    event.stopPropagation();
   }, true);
 }
 """
@@ -87,6 +139,10 @@ def adopt_candidate(candidate: str | None) -> str:
     return candidate or ""
 
 
+def blank_prompt_boxes() -> list[str]:
+    return ["" for _ in range(MAX_OUTPUT_VARIANTS)]
+
+
 def prompt_box_values(candidates: list[str]) -> list[str]:
     values = candidates[:MAX_OUTPUT_VARIANTS]
     return [values[index] if index < len(values) else "" for index in range(MAX_OUTPUT_VARIANTS)]
@@ -94,6 +150,19 @@ def prompt_box_values(candidates: list[str]) -> list[str]:
 
 def accept_dropped_image(image_path: str | None):
     return image_path or None, ""
+
+
+def store_excluded_tags(
+    excluded_tags: str,
+    path: Path = EXCLUDED_TAGS_PATH,
+) -> tuple[str, str]:
+    saved = save_exclusion_text(excluded_tags, path)
+    return saved, f"除外ワードを保存しました（{len(saved.split(', ')) if saved else 0}件）。"
+
+
+def restore_default_excluded_tags(path: Path = EXCLUDED_TAGS_PATH) -> tuple[str, str]:
+    saved = save_exclusion_text(DEFAULT_EXCLUSION_TEXT, path)
+    return saved, "既定の除外ワードに戻して保存しました。"
 
 
 def preview_image_url(image_url: str, allow_private_hosts: bool):
@@ -142,8 +211,8 @@ def build_app(*, service: WebPromptService | None = None):
         vision_model,
         history,
         allow_private_image_urls,
-        filter_image_tags,
-        ignored_image_tags,
+        apply_tag_exclusions,
+        excluded_tags,
         progress=gr.Progress(),
     ):
         try:
@@ -170,8 +239,8 @@ def build_app(*, service: WebPromptService | None = None):
                     action_override=action_override,
                     use_vision=use_vision,
                     vision_model=vision_model,
-                    filter_image_tags=filter_image_tags,
-                    ignored_image_tags=ignored_image_tags,
+                    apply_tag_exclusions=apply_tag_exclusions,
+                    excluded_tags=excluded_tags,
                     on_progress=report_progress,
                 )
             updated_history = prepend_history(
@@ -197,7 +266,7 @@ def build_app(*, service: WebPromptService | None = None):
             return (
                 {},
                 "",
-                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
+                *blank_prompt_boxes(),
                 "Error: "
                 + format_ollama_error(
                     exc,
@@ -331,16 +400,26 @@ def build_app(*, service: WebPromptService | None = None):
                 max_image_tags_input = gr.Slider(
                     1, 100, value=50, step=1, label="画像タグ上限"
                 )
-            with gr.Accordion("画像タグフィルター", open=False):
-                filter_image_tags_input = gr.Checkbox(
+            with gr.Accordion("除外ワード", open=True):
+                apply_tag_exclusions_input = gr.Checkbox(
                     value=True,
-                    label="不要な画像タグを除外",
+                    label="除外ワードを適用",
                 )
-                ignored_image_tags_input = gr.Textbox(
-                    value=DEFAULT_IMAGE_TAG_FILTER,
-                    label="除外ルール（カンマ区切り、*使用可）",
-                    lines=2,
-                    info="例: simple_background, halftone, *_background",
+                excluded_tags_input = gr.Textbox(
+                    value=load_exclusion_text(),
+                    label="除外ワード（カンマ区切り、*使用可）",
+                    lines=3,
+                    elem_id="excluded-tags-input",
+                    info=(
+                        "画像タグと出力プロンプトの両方から取り除きます。"
+                        "例: censored, bar_censor, *_censor, *_background"
+                    ),
+                )
+                with gr.Row():
+                    save_excluded_tags_button = gr.Button("除外ワードを保存")
+                    reset_excluded_tags_button = gr.Button("既定に戻す")
+                excluded_tags_status = gr.Markdown(
+                    "保存すると次回起動時もこの除外ワードを使います。"
                 )
 
         with gr.Accordion("画像タグの確認・修正", open=False):
@@ -397,8 +476,8 @@ def build_app(*, service: WebPromptService | None = None):
             vision_model_input,
             history_state,
             allow_private_image_urls_input,
-            filter_image_tags_input,
-            ignored_image_tags_input,
+            apply_tag_exclusions_input,
+            excluded_tags_input,
         ]
         outputs = [
             action_plan_output,
@@ -417,15 +496,21 @@ def build_app(*, service: WebPromptService | None = None):
             concurrency_limit=1,
         )
 
+        def cleared_prompt_state(status: str):
+            """Tags, base prompt, outputs, candidates, plan, and status of a fresh image."""
+            return (
+                "",
+                "",
+                *blank_prompt_boxes(),
+                gr.Radio(choices=[], value=None),
+                {},
+                status,
+            )
+
         def handle_image_upload(image_path):
             return (
                 *accept_dropped_image(image_path),
-                "",
-                "",
-                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
-                gr.Radio(choices=[], value=None),
-                {},
-                "",
+                *cleared_prompt_state(""),
             )
 
         def handle_image_url(image_url, allow_private_hosts):
@@ -433,12 +518,7 @@ def build_app(*, service: WebPromptService | None = None):
                 preview_image_url(image_url, allow_private_hosts),
                 None,
                 (image_url or "").strip(),
-                "",
-                "",
-                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
-                gr.Radio(choices=[], value=None),
-                {},
-                "URL画像を読み込みました。",
+                *cleared_prompt_state("URL画像を読み込みました。"),
             )
 
         image_workspace.input(
@@ -492,6 +572,18 @@ def build_app(*, service: WebPromptService | None = None):
             outputs=ollama_diagnostic_output,
             queue=False,
         )
+        save_excluded_tags_button.click(
+            store_excluded_tags,
+            inputs=excluded_tags_input,
+            outputs=[excluded_tags_input, excluded_tags_status],
+            queue=False,
+        )
+        reset_excluded_tags_button.click(
+            restore_default_excluded_tags,
+            inputs=None,
+            outputs=[excluded_tags_input, excluded_tags_status],
+            queue=False,
+        )
         adopt_button.click(
             adopt_candidate,
             inputs=candidate_selector,
@@ -512,7 +604,7 @@ def build_app(*, service: WebPromptService | None = None):
         )
         demo.load(
             fn=None,
-            js=IMAGE_URL_DROP_JS,
+            js=IMAGE_INPUT_JS,
             queue=False,
             api_name=False,
         )

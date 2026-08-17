@@ -45,6 +45,20 @@ class BackgroundTagger:
         )
 
 
+class CensoredTagger:
+    def predict(self, _image_path: Path, **_options) -> ImageTagResult:
+        return ImageTagResult(
+            tags=[
+                PredictedTag("1girl", 0.99, GENERAL_CATEGORY),
+                PredictedTag("censored", 0.95, GENERAL_CATEGORY),
+                PredictedTag("bar_censor", 0.9, GENERAL_CATEGORY),
+                PredictedTag("mosaic_censoring", 0.85, GENERAL_CATEGORY),
+                PredictedTag("rain", 0.8, GENERAL_CATEGORY),
+            ],
+            rating=None,
+        )
+
+
 class FixedRouter:
     def __init__(self, plan: ActionPlan) -> None:
         self.plan = plan
@@ -87,6 +101,15 @@ class TwoVariantCompiler(FakeCompiler):
         )
 
 
+class CensoredOutputCompiler(FakeCompiler):
+    def compile(self, request) -> CompileResult:
+        self.last_request = request
+        return CompileResult(
+            variants=[["1girl", "censored", "rain"], ["1girl", "bar_censor"]],
+            unknown_tags=[],
+        )
+
+
 class FakeVisionClient:
     def __init__(self) -> None:
         self.last_request = None
@@ -116,6 +139,30 @@ def test_service_can_run_image_tagging_without_prompt_compiler() -> None:
     assert result.action_plan["action"] == "tag_image"
     assert result.inferred_tags == "1girl, rain, power_(chainsaw_man)"
     assert "subject: 1girl" in result.output
+
+
+def test_service_excludes_censor_tags_from_image_tags_and_prompt_output() -> None:
+    plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして", reason="edit")
+    compiler = CensoredOutputCompiler()
+    service = WebPromptService(
+        tagger=CensoredTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: compiler,
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="夜にして",
+        base_prompt="",
+    )
+
+    assert result.inferred_tags == "1girl, rain"
+    assert "censored" not in compiler.last_request.scene_description
+    assert all("censor" not in candidate for candidate in result.candidates)
+    assert (
+        "Filtered image tags: censored, bar_censor, mosaic_censoring" in result.status
+    )
+    assert "Filtered prompt tags: censored, bar_censor" in result.status
 
 
 def test_service_filters_default_exact_and_wildcard_image_tags() -> None:
@@ -152,13 +199,13 @@ def test_service_can_disable_or_customize_image_tag_filter() -> None:
         image_path="sample.png",
         instruction="タグを推測して",
         base_prompt="",
-        filter_image_tags=False,
+        apply_tag_exclusions=False,
     )
     custom = service.run(
         image_path="sample.png",
         instruction="タグを推測して",
         base_prompt="",
-        ignored_image_tags="green_*",
+        excluded_tags="green_*",
     )
 
     assert "simple_background" in unfiltered.inferred_tags

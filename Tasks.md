@@ -165,3 +165,28 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit tests prove every secondary section is initially folded.
 - [x] Chromium E2E proves replacing an image through the unified workspace clears old prompt state and URL drops remain the active source.
 - [x] The full test suite and CI pass (85 passed, 1 browser-only skip; 3 Chromium E2E passed).
+
+## Task 14 — Manage quality-degrading exclusion words from the UI
+
+- [x] Exclude `censored`, `bar_censor`, and other censor tags by default.
+- [x] Apply the exclusion words to generated prompts as well as inferred image tags.
+- [x] Add save and restore-defaults actions that persist the exclusion words to `data/excluded_tags.json`.
+- [x] Load the saved exclusion words when the workbench starts.
+
+### Gate
+
+- [x] Unit tests prove censor defaults, rule normalization, and save/load round-trips.
+- [x] Unit test proves censor tags are removed from image tags and prompt output, and reported in the status.
+- [x] Gradio configuration exposes an open exclusion-word editor with save and reset buttons.
+
+## Task 15 — Generate from a clipboard image
+
+- [x] Route a pasted clipboard image into the image workspace from anywhere on the page.
+- [x] Keep text paste in text fields unaffected when the clipboard also carries text.
+- [x] Load a pasted HTTP/HTTPS image URL through the existing URL bridge.
+
+### Gate
+
+- [x] Unit test proves the paste bridge targets the image workspace file input.
+- [x] Chromium E2E proves a pasted image becomes the active image and produces a run.
+- [x] The full test suite and CI pass (93 passed, 1 browser-only skip; 4 Chromium E2E passed).

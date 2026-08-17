@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import functools
+import hashlib
 import os
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -88,6 +90,47 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             expect(fourth).to_be_visible()
             expect(fourth).to_be_editable()
             expect(fourth).to_have_value("")
+            browser.close()
+
+
+def test_clipboard_image_can_be_pasted_into_image_workspace(tmp_path) -> None:
+    image = tmp_path / "pasted.png"
+    Image.new("RGB", (4, 4), "purple").save(image)
+    data_url = "data:image/png;base64," + base64.b64encode(image.read_bytes()).decode()
+
+    with running_test_webui() as (url, service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_function(
+                "document.documentElement.dataset.imageUrlDropReady === 'true'"
+            )
+            page.evaluate(
+                """async (dataUrl) => {
+                    const blob = await (await fetch(dataUrl)).blob();
+                    const transfer = new DataTransfer();
+                    transfer.items.add(
+                        new File([blob], "clipboard.png", { type: "image/png" })
+                    );
+                    document.dispatchEvent(
+                        new ClipboardEvent("paste", {
+                            clipboardData: transfer,
+                            bubbles: true,
+                        })
+                    );
+                }""",
+                data_url,
+            )
+            expect(page.locator("#image-workspace img")).to_be_visible()
+            page.get_by_role("button", name="実行", exact=True).click()
+            page.get_by_text("画像タグの確認・修正", exact=True).click()
+            expect(page.locator("#inferred-tags-editor textarea")).to_have_value(
+                "1girl, solo"
+            )
+            assert service.image_digests[-1] == hashlib.sha256(
+                image.read_bytes()
+            ).hexdigest()
             browser.close()
 
 

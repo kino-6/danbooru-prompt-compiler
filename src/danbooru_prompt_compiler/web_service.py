@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable
 
@@ -25,13 +24,17 @@ from .image_tagger import (
 from .llm import LLMClient, OllamaClient
 from .models import CompileMode, CompileRequest, InputType, LLMRequest
 from .normalizer import normalize_tags, parse_tag_text
+from .tag_filter import (
+    DEFAULT_EXCLUSION_TEXT,
+    parse_exclusion_rules,
+    split_excluded,
+)
 from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedPlan, WebAction
 
 
 DEFAULT_ROUTER_MODEL = "qwen3:1.7b"
 DEFAULT_COMPILER_MODEL = "qwen3:1.7b"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
-DEFAULT_IMAGE_TAG_FILTER = "simple_background, halftone, *_background"
 ProgressCallback = Callable[[str, float], None]
 INSTRUCTION_TAG_HINTS = {
     "振り返": "looking_back",
@@ -89,13 +92,16 @@ class WebPromptService:
         action_override: str = "auto",
         use_vision: bool = False,
         vision_model: str = DEFAULT_VISION_MODEL,
-        filter_image_tags: bool = True,
-        ignored_image_tags: str = DEFAULT_IMAGE_TAG_FILTER,
+        apply_tag_exclusions: bool = True,
+        excluded_tags: str = DEFAULT_EXCLUSION_TEXT,
         on_progress: ProgressCallback | None = None,
     ) -> WebRunResult:
         clean_instruction = (instruction or "").strip()
         clean_base_prompt = (base_prompt or "").strip()
         clean_edited_tags = (edited_tags or "").strip()
+        exclusion_rules = (
+            parse_exclusion_rules(excluded_tags) if apply_tag_exclusions else []
+        )
         if not image_path and not clean_instruction and not clean_base_prompt and not clean_edited_tags:
             raise ValueError("画像、指示、または既存プロンプトを入力してください。")
         route_request = RouteRequest(
@@ -122,11 +128,11 @@ class WebPromptService:
             character_threshold=character_threshold,
             max_image_tags=max_image_tags,
         )
-        filtered_image_tags: list[str] = []
-        if image_result and filter_image_tags:
-            image_result, filtered_image_tags = _filter_image_result(
+        excluded_image_tags: list[str] = []
+        if image_result and exclusion_rules:
+            image_result, excluded_image_tags = _exclude_image_tags(
                 image_result,
-                ignored_image_tags,
+                exclusion_rules,
             )
         inferred_names = image_result.names if image_result else []
         if clean_edited_tags:
@@ -146,7 +152,7 @@ class WebPromptService:
                     routed,
                     image_result=image_result,
                     image_cache_hit=image_cache_hit,
-                    filtered_image_tags=filtered_image_tags,
+                    excluded_image_tags=excluded_image_tags,
                 ),
                 candidates=[format_clipboard_text(inferred_names, OutputFormat.grouped)],
             )
@@ -160,16 +166,11 @@ class WebPromptService:
             and routed.plan.action in {WebAction.edit, WebAction.next_panel}
         ):
             _report_progress(on_progress, "vision", 0.55)
-            vision_client = self.vision_factory(ollama_url, vision_model)
-            vision_response = vision_client.generate(
-                LLMRequest(
-                    prompt=_vision_prompt(clean_instruction),
-                    variants=1,
-                    image_paths=[image_path],
-                )
-            )
-            vision_observation = (
-                vision_response.outputs[0].strip() if vision_response.outputs else ""
+            vision_observation = self._observe_image(
+                image_path,
+                instruction=clean_instruction,
+                ollama_url=ollama_url,
+                vision_model=vision_model,
             )
 
         _report_progress(on_progress, "compilation", 0.7)
@@ -193,6 +194,10 @@ class WebPromptService:
                     routed.plan.edit_instruction or clean_instruction
                 ),
             )
+        output_variants, excluded_prompt_tags = _exclude_variant_tags(
+            output_variants,
+            exclusion_rules,
+        )
         candidates = [
             format_clipboard_text(tags, OutputFormat.grouped) for tags in output_variants
         ]
@@ -204,7 +209,8 @@ class WebPromptService:
             routed,
             image_result=image_result,
             image_cache_hit=image_cache_hit,
-            filtered_image_tags=filtered_image_tags,
+            excluded_image_tags=excluded_image_tags,
+            excluded_prompt_tags=excluded_prompt_tags,
         )
         if compile_result.unknown_tags:
             status += f"\n\nUnknown tags: {', '.join(compile_result.unknown_tags)}"
@@ -217,6 +223,24 @@ class WebPromptService:
         )
         _report_progress(on_progress, "complete", 1.0)
         return result
+
+    def _observe_image(
+        self,
+        image_path: str,
+        *,
+        instruction: str,
+        ollama_url: str,
+        vision_model: str,
+    ) -> str:
+        vision_client = self.vision_factory(ollama_url, vision_model)
+        response = vision_client.generate(
+            LLMRequest(
+                prompt=_vision_prompt(instruction),
+                variants=1,
+                image_paths=[image_path],
+            )
+        )
+        return response.outputs[0].strip() if response.outputs else ""
 
     def _tag_image(
         self,
@@ -324,32 +348,34 @@ def _replace_image_tags(
     return ImageTagResult(tags=tags, rating=image_result.rating if image_result else None)
 
 
-def _filter_image_result(
+def _exclude_image_tags(
     image_result: ImageTagResult,
-    ignored_image_tags: str,
+    rules: list[str],
 ) -> tuple[ImageTagResult, list[str]]:
-    rules = _parse_image_tag_filter_rules(ignored_image_tags)
     if not rules:
         return image_result, []
 
-    kept: list[PredictedTag] = []
-    filtered: list[str] = []
-    for tag in image_result.tags:
-        if any(fnmatchcase(tag.name.lower(), rule) for rule in rules):
-            filtered.append(tag.name)
-        else:
-            kept.append(tag)
-    return ImageTagResult(tags=kept, rating=image_result.rating), filtered
-
-
-def _parse_image_tag_filter_rules(value: str) -> list[str]:
-    return list(
-        dict.fromkeys(
-            rule.strip().lower().replace(" ", "_")
-            for rule in (value or "").replace("\n", ",").split(",")
-            if rule.strip()
-        )
+    kept, excluded = split_excluded(image_result.tags, rules, key=lambda tag: tag.name)
+    return (
+        ImageTagResult(tags=kept, rating=image_result.rating),
+        [tag.name for tag in excluded],
     )
+
+
+def _exclude_variant_tags(
+    variants: list[list[str]],
+    rules: list[str],
+) -> tuple[list[list[str]], list[str]]:
+    if not rules:
+        return variants, []
+
+    kept_variants: list[list[str]] = []
+    excluded: list[str] = []
+    for variant in variants:
+        kept, dropped = split_excluded(variant, rules)
+        kept_variants.append(kept)
+        excluded.extend(dropped)
+    return kept_variants, list(dict.fromkeys(excluded))
 
 
 def _build_compile_request(
@@ -479,7 +505,8 @@ def _status_text(
     *,
     image_result: ImageTagResult | None,
     image_cache_hit: bool | None,
-    filtered_image_tags: list[str],
+    excluded_image_tags: list[str],
+    excluded_prompt_tags: list[str] | None = None,
 ) -> str:
     lines = [f"Router: {routed.source}", f"Action: {routed.plan.action.value}"]
     if routed.warning:
@@ -491,8 +518,10 @@ def _status_text(
             lines.append(
                 f"Rating estimate: {image_result.rating.name} ({image_result.rating.score:.3f})"
             )
-    if filtered_image_tags:
-        lines.append(f"Filtered image tags: {', '.join(filtered_image_tags)}")
+    if excluded_image_tags:
+        lines.append(f"Filtered image tags: {', '.join(excluded_image_tags)}")
+    if excluded_prompt_tags:
+        lines.append(f"Filtered prompt tags: {', '.join(excluded_prompt_tags)}")
     return "  \n".join(lines)
 
 

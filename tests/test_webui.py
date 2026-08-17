@@ -5,12 +5,18 @@ import pytest
 
 gradio = pytest.importorskip("gradio")
 
+from danbooru_prompt_compiler.tag_filter import (  # noqa: E402
+    DEFAULT_EXCLUSION_TEXT,
+    load_exclusion_text,
+)
 from danbooru_prompt_compiler.webui import (  # noqa: E402
     accept_dropped_image,
     adopt_candidate,
     build_app,
     prepend_history,
     prompt_box_values,
+    restore_default_excluded_tags,
+    store_excluded_tags,
 )
 
 
@@ -36,18 +42,18 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload", "clipboard"]
     assert components["出力数"]["props"]["value"] == 4
-    assert components["不要な画像タグを除外"]["props"]["value"] is True
+    assert components["除外ワードを適用"]["props"]["value"] is True
     assert (
-        components["除外ルール（カンマ区切り、*使用可）"]["props"]["value"]
-        == "simple_background, halftone, *_background"
+        components["除外ワード（カンマ区切り、*使用可）"]["props"]["value"]
+        == load_exclusion_text()
     )
-    filter_accordion = next(
+    exclusion_accordion = next(
         component
         for component in app.config["components"]
         if component.get("type") == "accordion"
-        and component.get("props", {}).get("label") == "画像タグフィルター"
+        and component.get("props", {}).get("label") == "除外ワード"
     )
-    assert filter_accordion["props"]["open"] is False
+    assert exclusion_accordion["props"]["open"] is True
     assert [value for _label, value in components["出力数"]["props"]["choices"]] == [
         1,
         2,
@@ -92,6 +98,45 @@ def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:
     assert 'event.target.closest("#image-workspace")' in script
     assert '"#dropped-image-url-input textarea' in script
     assert '"button#dropped-image-url-button, #dropped-image-url-button button"' in script
+
+
+def test_pasted_clipboard_image_is_routed_into_the_image_workspace() -> None:
+    app = build_app()
+    paste_dependencies = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if 'addEventListener("paste"' in (dependency.get("js") or "")
+    ]
+
+    assert len(paste_dependencies) == 1
+    script = paste_dependencies[0]["js"]
+    assert 'item.kind === "file"' in script
+    assert '(item.type || "").startsWith("image/")' in script
+    assert "'#image-workspace input[type=\"file\"]'" in script
+    assert "input.files = transfer.files" in script
+    assert "clipboard" in _components_by_label(app)["画像"]["props"]["sources"]
+
+
+def test_exclusion_words_can_be_saved_and_reset_from_the_ui(tmp_path) -> None:
+    store_path = tmp_path / "excluded_tags.json"
+
+    saved, saved_message = store_excluded_tags(
+        "Censored, bar_censor, censored", store_path
+    )
+    reset, reset_message = restore_default_excluded_tags(store_path)
+
+    assert saved == "censored, bar_censor"
+    assert "保存" in saved_message
+    assert load_exclusion_text(store_path) == DEFAULT_EXCLUSION_TEXT
+    assert reset == DEFAULT_EXCLUSION_TEXT
+    assert "既定" in reset_message
+
+    buttons = {
+        component["props"].get("value")
+        for component in build_app().config["components"]
+        if component.get("type") == "button"
+    }
+    assert {"除外ワードを保存", "既定に戻す"} <= buttons
 
 
 def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:

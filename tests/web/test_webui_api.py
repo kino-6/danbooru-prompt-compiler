@@ -36,7 +36,7 @@ def _predict(client: Client, image, image_url: str, allow_private: bool):
         "qwen3-vl:8b",
         allow_private,
         True,
-        "simple_background, halftone, *_background",
+        "simple_background, halftone, *_background, censored, *_censor",
         api_name="/run_prompt_workbench",
     )
 
