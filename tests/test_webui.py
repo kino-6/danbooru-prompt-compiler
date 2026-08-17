@@ -87,13 +87,10 @@ def test_history_is_newest_first_and_bounded() -> None:
 def test_prompt_candidates_get_independent_copyable_boxes() -> None:
     values = prompt_box_values(["first prompt", "second prompt"])
 
-    assert values == [
-        ("first prompt", True),
-        ("second prompt", True),
-        ("", False),
-        ("", False),
-    ]
+    assert values == ["first prompt", "second prompt", "", ""]
     components = _components_by_label(build_app())
     for index in range(1, 5):
         props = components[f"出力プロンプト {index}"]["props"]
         assert "copy" in props["buttons"]
+        assert props["interactive"] is True
+        assert props["visible"] is True

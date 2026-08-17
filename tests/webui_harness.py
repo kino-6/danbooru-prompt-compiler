@@ -10,8 +10,9 @@ from danbooru_prompt_compiler.webui import build_app
 
 
 class RecordingWebService:
-    def __init__(self) -> None:
+    def __init__(self, candidates: list[str] | None = None) -> None:
         self.image_digests: list[str | None] = []
+        self.candidates = candidates
 
     def run(self, *, image_path: str | None, **_options) -> WebRunResult:
         digest = (
@@ -21,18 +22,19 @@ class RecordingWebService:
         )
         self.image_digests.append(digest)
         output = f"digest_{digest}" if digest else "no_image"
+        candidates = self.candidates or [output]
         return WebRunResult(
             action_plan={"action": "tag_image", "router_source": "test"},
             inferred_tags="1girl, solo",
-            output=output,
+            output="\n\n".join(candidates),
             status="ok",
-            candidates=[output],
+            candidates=candidates,
         )
 
 
 @contextmanager
-def running_test_webui():
-    service = RecordingWebService()
+def running_test_webui(candidates: list[str] | None = None):
+    service = RecordingWebService(candidates=candidates)
     app = build_app(service=service)
     port = _free_port()
     _server, local_url, _share_url = app.queue(default_concurrency_limit=1).launch(

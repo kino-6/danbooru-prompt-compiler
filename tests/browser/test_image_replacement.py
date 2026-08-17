@@ -38,3 +38,31 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             expect(selected_name).to_have_value("second.png")
             expect(page.locator('input[type="file"]').first).to_be_attached()
             browser.close()
+
+
+def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> None:
+    image = tmp_path / "input.png"
+    Image.new("RGB", (4, 4), "red").save(image)
+    prompts = [
+        "1girl, solo, rain",
+        "1girl, solo, night",
+        "1girl, solo, looking_back",
+    ]
+
+    with running_test_webui(candidates=prompts) as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.locator('input[type="file"]').first.set_input_files(str(image))
+            page.get_by_role("button", name="実行", exact=True).click()
+
+            for index, prompt in enumerate(prompts, 1):
+                output = page.get_by_label(f"出力プロンプト {index}")
+                expect(output).to_be_visible()
+                expect(output).to_be_editable()
+                expect(output).to_have_value(prompt)
+
+            expect(page.get_by_label("出力プロンプト 4")).to_be_visible()
+            expect(page.get_by_label("出力プロンプト 4")).to_have_value("")
+            browser.close()

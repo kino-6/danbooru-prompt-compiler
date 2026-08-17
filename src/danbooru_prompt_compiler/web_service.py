@@ -131,7 +131,7 @@ class WebPromptService:
                     image_result=image_result,
                     image_cache_hit=image_cache_hit,
                 ),
-                candidates=[output],
+                candidates=[format_variant(inferred_names, OutputFormat.flat)],
             )
             _report_progress(on_progress, "complete", 1.0)
             return result
@@ -176,7 +176,7 @@ class WebPromptService:
                     routed.plan.edit_instruction or clean_instruction
                 ),
             )
-        candidates = [format_variant(tags, OutputFormat.grouped) for tags in output_variants]
+        candidates = [format_variant(tags, OutputFormat.flat) for tags in output_variants]
         rendered_variants = [
             _render_candidate(index, candidate, multiple=len(candidates) > 1)
             for index, candidate in enumerate(candidates, start=1)

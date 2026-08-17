@@ -44,12 +44,9 @@ def adopt_candidate(candidate: str | None) -> str:
     return candidate or ""
 
 
-def prompt_box_values(candidates: list[str]) -> list[tuple[str, bool]]:
+def prompt_box_values(candidates: list[str]) -> list[str]:
     values = candidates[:MAX_OUTPUT_VARIANTS]
-    return [
-        (values[index], True) if index < len(values) else ("", False)
-        for index in range(MAX_OUTPUT_VARIANTS)
-    ]
+    return [values[index] if index < len(values) else "" for index in range(MAX_OUTPUT_VARIANTS)]
 
 
 def accept_dropped_image(image_path: str | None):
@@ -144,28 +141,20 @@ def build_app(*, service: WebPromptService | None = None):
                 choices=result.candidates,
                 value=result.candidates[0] if result.candidates else None,
             )
-            prompt_updates = [
-                gr.Textbox(value=value, visible=visible)
-                for value, visible in prompt_box_values(result.candidates)
-            ]
             return (
                 result.action_plan,
                 result.inferred_tags,
-                *prompt_updates,
+                *prompt_box_values(result.candidates),
                 result.status,
                 candidate_update,
                 updated_history,
                 updated_history,
             )
         except Exception as exc:
-            prompt_updates = [
-                gr.Textbox(value="", visible=False)
-                for _ in range(MAX_OUTPUT_VARIANTS)
-            ]
             return (
                 {},
                 "",
-                *prompt_updates,
+                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
                 "Error: "
                 + format_ollama_error(
                     exc,
@@ -293,9 +282,9 @@ def build_app(*, service: WebPromptService | None = None):
                     prompt_outputs.append(
                         gr.Textbox(
                             label=f"出力プロンプト {index + 1}",
-                            lines=10,
+                            lines=5,
                             buttons=["copy"],
-                            visible=index == 0,
+                            interactive=True,
                         )
                     )
         with gr.Row():
