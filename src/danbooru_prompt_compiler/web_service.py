@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +31,7 @@ from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedP
 DEFAULT_ROUTER_MODEL = "qwen3:1.7b"
 DEFAULT_COMPILER_MODEL = "qwen3:1.7b"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
+DEFAULT_IMAGE_TAG_FILTER = "simple_background, halftone, *_background"
 ProgressCallback = Callable[[str, float], None]
 INSTRUCTION_TAG_HINTS = {
     "振り返": "looking_back",
@@ -87,6 +89,8 @@ class WebPromptService:
         action_override: str = "auto",
         use_vision: bool = False,
         vision_model: str = DEFAULT_VISION_MODEL,
+        filter_image_tags: bool = True,
+        ignored_image_tags: str = DEFAULT_IMAGE_TAG_FILTER,
         on_progress: ProgressCallback | None = None,
     ) -> WebRunResult:
         clean_instruction = (instruction or "").strip()
@@ -118,6 +122,12 @@ class WebPromptService:
             character_threshold=character_threshold,
             max_image_tags=max_image_tags,
         )
+        filtered_image_tags: list[str] = []
+        if image_result and filter_image_tags:
+            image_result, filtered_image_tags = _filter_image_result(
+                image_result,
+                ignored_image_tags,
+            )
         inferred_names = image_result.names if image_result else []
         if clean_edited_tags:
             inferred_names = normalize_tags(parse_tag_text(clean_edited_tags))
@@ -136,6 +146,7 @@ class WebPromptService:
                     routed,
                     image_result=image_result,
                     image_cache_hit=image_cache_hit,
+                    filtered_image_tags=filtered_image_tags,
                 ),
                 candidates=[format_clipboard_text(inferred_names, OutputFormat.grouped)],
             )
@@ -193,6 +204,7 @@ class WebPromptService:
             routed,
             image_result=image_result,
             image_cache_hit=image_cache_hit,
+            filtered_image_tags=filtered_image_tags,
         )
         if compile_result.unknown_tags:
             status += f"\n\nUnknown tags: {', '.join(compile_result.unknown_tags)}"
@@ -310,6 +322,34 @@ def _replace_image_tags(
         for name in names
     ]
     return ImageTagResult(tags=tags, rating=image_result.rating if image_result else None)
+
+
+def _filter_image_result(
+    image_result: ImageTagResult,
+    ignored_image_tags: str,
+) -> tuple[ImageTagResult, list[str]]:
+    rules = _parse_image_tag_filter_rules(ignored_image_tags)
+    if not rules:
+        return image_result, []
+
+    kept: list[PredictedTag] = []
+    filtered: list[str] = []
+    for tag in image_result.tags:
+        if any(fnmatchcase(tag.name.lower(), rule) for rule in rules):
+            filtered.append(tag.name)
+        else:
+            kept.append(tag)
+    return ImageTagResult(tags=kept, rating=image_result.rating), filtered
+
+
+def _parse_image_tag_filter_rules(value: str) -> list[str]:
+    return list(
+        dict.fromkeys(
+            rule.strip().lower().replace(" ", "_")
+            for rule in (value or "").replace("\n", ",").split(",")
+            if rule.strip()
+        )
+    )
 
 
 def _build_compile_request(
@@ -439,6 +479,7 @@ def _status_text(
     *,
     image_result: ImageTagResult | None,
     image_cache_hit: bool | None,
+    filtered_image_tags: list[str],
 ) -> str:
     lines = [f"Router: {routed.source}", f"Action: {routed.plan.action.value}"]
     if routed.warning:
@@ -450,6 +491,8 @@ def _status_text(
             lines.append(
                 f"Rating estimate: {image_result.rating.name} ({image_result.rating.score:.3f})"
             )
+    if filtered_image_tags:
+        lines.append(f"Filtered image tags: {', '.join(filtered_image_tags)}")
     return "  \n".join(lines)
 
 

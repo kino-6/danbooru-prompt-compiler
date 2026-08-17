@@ -31,6 +31,20 @@ class FakeTagger:
         )
 
 
+class BackgroundTagger:
+    def predict(self, _image_path: Path, **_options) -> ImageTagResult:
+        return ImageTagResult(
+            tags=[
+                PredictedTag("1girl", 0.99, GENERAL_CATEGORY),
+                PredictedTag("simple_background", 0.95, GENERAL_CATEGORY),
+                PredictedTag("halftone", 0.9, GENERAL_CATEGORY),
+                PredictedTag("green_background", 0.85, GENERAL_CATEGORY),
+                PredictedTag("green_eyes", 0.8, GENERAL_CATEGORY),
+            ],
+            rating=None,
+        )
+
+
 class FixedRouter:
     def __init__(self, plan: ActionPlan) -> None:
         self.plan = plan
@@ -102,6 +116,57 @@ def test_service_can_run_image_tagging_without_prompt_compiler() -> None:
     assert result.action_plan["action"] == "tag_image"
     assert result.inferred_tags == "1girl, rain, power_(chainsaw_man)"
     assert "subject: 1girl" in result.output
+
+
+def test_service_filters_default_exact_and_wildcard_image_tags() -> None:
+    plan = ActionPlan(action=WebAction.tag_image, reason="tag it")
+    service = WebPromptService(
+        tagger=BackgroundTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="タグを推測して",
+        base_prompt="",
+    )
+
+    assert result.inferred_tags == "1girl, green_eyes"
+    assert "simple_background" not in result.output
+    assert "halftone" not in result.output
+    assert "green_background" not in result.output
+    assert (
+        "Filtered image tags: simple_background, halftone, green_background"
+        in result.status
+    )
+
+
+def test_service_can_disable_or_customize_image_tag_filter() -> None:
+    plan = ActionPlan(action=WebAction.tag_image, reason="tag it")
+    service = WebPromptService(
+        tagger=BackgroundTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+    )
+
+    unfiltered = service.run(
+        image_path="sample.png",
+        instruction="タグを推測して",
+        base_prompt="",
+        filter_image_tags=False,
+    )
+    custom = service.run(
+        image_path="sample.png",
+        instruction="タグを推測して",
+        base_prompt="",
+        ignored_image_tags="green_*",
+    )
+
+    assert "simple_background" in unfiltered.inferred_tags
+    assert "halftone" in unfiltered.inferred_tags
+    assert "green_background" in unfiltered.inferred_tags
+    assert "green_background" not in custom.inferred_tags
+    assert "green_eyes" not in custom.inferred_tags
+    assert "simple_background" in custom.inferred_tags
 
 
 def test_service_caches_unchanged_image_tagging_result() -> None:

@@ -12,6 +12,7 @@ from danbooru_prompt_compiler.webui import build_app
 class RecordingWebService:
     def __init__(self, candidates: list[str] | None = None) -> None:
         self.image_digests: list[str | None] = []
+        self.run_options: list[dict[str, object]] = []
         self.candidates = candidates
 
     def run(self, *, image_path: str | None, **_options) -> WebRunResult:
@@ -21,6 +22,7 @@ class RecordingWebService:
             else None
         )
         self.image_digests.append(digest)
+        self.run_options.append({"image_path": image_path, **_options})
         output = f"digest_{digest}" if digest else "no_image"
         candidates = self.candidates or [output]
         return WebRunResult(

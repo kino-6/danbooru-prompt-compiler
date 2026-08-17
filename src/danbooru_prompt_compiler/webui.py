@@ -6,6 +6,7 @@ from .image_source import load_image_url_preview, resolve_image_source
 from .ollama_diagnostics import check_ollama, format_ollama_error
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
+    DEFAULT_IMAGE_TAG_FILTER,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_VISION_MODEL,
     WebPromptService,
@@ -103,6 +104,8 @@ def build_app(*, service: WebPromptService | None = None):
         vision_model,
         history,
         allow_private_image_urls,
+        filter_image_tags,
+        ignored_image_tags,
         progress=gr.Progress(),
     ):
         try:
@@ -129,6 +132,8 @@ def build_app(*, service: WebPromptService | None = None):
                     action_override=action_override,
                     use_vision=use_vision,
                     vision_model=vision_model,
+                    filter_image_tags=filter_image_tags,
+                    ignored_image_tags=ignored_image_tags,
                     on_progress=report_progress,
                 )
             updated_history = prepend_history(
@@ -210,6 +215,7 @@ def build_app(*, service: WebPromptService | None = None):
                     label="既存プロンプト（任意）",
                     placeholder="画像の代わりに既存タグを編集するときに入力",
                     lines=4,
+                    elem_id="base-prompt-input",
                 )
                 with gr.Row():
                     action_override_input = gr.Dropdown(
@@ -270,6 +276,17 @@ def build_app(*, service: WebPromptService | None = None):
                 max_image_tags_input = gr.Slider(
                     1, 100, value=50, step=1, label="画像タグ上限"
                 )
+            with gr.Accordion("画像タグフィルター", open=False):
+                filter_image_tags_input = gr.Checkbox(
+                    value=True,
+                    label="不要な画像タグを除外",
+                )
+                ignored_image_tags_input = gr.Textbox(
+                    value=DEFAULT_IMAGE_TAG_FILTER,
+                    label="除外ルール（カンマ区切り、*使用可）",
+                    lines=2,
+                    info="例: simple_background, halftone, *_background",
+                )
 
         with gr.Row():
             action_plan_output = gr.JSON(label="実行計画")
@@ -279,6 +296,7 @@ def build_app(*, service: WebPromptService | None = None):
             lines=4,
             buttons=["copy"],
             interactive=True,
+            elem_id="inferred-tags-editor",
         )
         prompt_outputs = []
         for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
@@ -320,6 +338,8 @@ def build_app(*, service: WebPromptService | None = None):
             vision_model_input,
             history_state,
             allow_private_image_urls_input,
+            filter_image_tags_input,
+            ignored_image_tags_input,
         ]
         outputs = [
             action_plan_output,
@@ -337,14 +357,31 @@ def build_app(*, service: WebPromptService | None = None):
             api_name="run_prompt_workbench",
             concurrency_limit=1,
         )
+        def handle_image_upload(image_path):
+            return (
+                *accept_dropped_image(image_path),
+                "",
+                "",
+                *("" for _ in range(MAX_OUTPUT_VARIANTS)),
+                gr.Radio(choices=[], value=None),
+                {},
+                "",
+            )
+
         image_drop_input.upload(
-            accept_dropped_image,
+            handle_image_upload,
             inputs=image_drop_input,
             outputs=[
                 active_image_input,
                 image_preview,
                 selected_image_name,
                 image_drop_input,
+                inferred_tags_editor,
+                base_prompt_input,
+                *prompt_outputs,
+                candidate_selector,
+                action_plan_output,
+                status_output,
             ],
             queue=False,
         )

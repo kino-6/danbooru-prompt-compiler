@@ -23,7 +23,8 @@ def _components_by_label(app) -> dict[str, dict]:
 
 
 def test_webui_exposes_human_correction_and_vision_controls() -> None:
-    components = _components_by_label(build_app())
+    app = build_app()
+    components = _components_by_label(app)
 
     assert components["画像タグ（修正して再実行できます）"]["props"]["interactive"]
     action_values = {
@@ -34,6 +35,18 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert "選択中画像" in components
     assert components["出力数"]["props"]["value"] == 4
+    assert components["不要な画像タグを除外"]["props"]["value"] is True
+    assert (
+        components["除外ルール（カンマ区切り、*使用可）"]["props"]["value"]
+        == "simple_background, halftone, *_background"
+    )
+    filter_accordion = next(
+        component
+        for component in app.config["components"]
+        if component.get("type") == "accordion"
+        and component.get("props", {}).get("label") == "画像タグフィルター"
+    )
+    assert filter_accordion["props"]["open"] is False
     assert [value for _label, value in components["出力数"]["props"]["choices"]] == [
         1,
         2,

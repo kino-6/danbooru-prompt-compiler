@@ -23,7 +23,7 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
     Image.new("RGB", (4, 4), "red").save(first)
     Image.new("RGB", (4, 4), "blue").save(second)
 
-    with running_test_webui() as (url, _service):
+    with running_test_webui() as (url, service):
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             page = browser.new_page()
@@ -33,10 +33,25 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             file_input.set_input_files(str(first))
             selected_name = page.get_by_label("選択中画像")
             expect(selected_name).to_have_value("first.png")
+            page.get_by_role("button", name="実行", exact=True).click()
+            inferred_tags = page.locator("#inferred-tags-editor textarea")
+            expect(inferred_tags).to_have_value("1girl, solo")
+            base_prompt = page.locator("#base-prompt-input textarea")
+            base_prompt.fill("old prompt")
+            expect(page.locator("#prompt-output-1 textarea")).not_to_have_value("")
 
             page.locator('input[type="file"]').first.set_input_files(str(second))
             expect(selected_name).to_have_value("second.png")
             expect(page.locator('input[type="file"]').first).to_be_attached()
+            expect(inferred_tags).to_have_value("")
+            expect(base_prompt).to_have_value("")
+            for index in range(1, 5):
+                expect(page.locator(f"#prompt-output-{index} textarea")).to_have_value("")
+
+            page.get_by_role("button", name="実行", exact=True).click()
+            expect(inferred_tags).to_have_value("1girl, solo")
+            assert service.run_options[-1]["edited_tags"] == ""
+            assert service.run_options[-1]["base_prompt"] == ""
             browser.close()
 
 
