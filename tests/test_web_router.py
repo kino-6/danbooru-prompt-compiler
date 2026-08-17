@@ -117,3 +117,16 @@ def test_router_rejects_small_model_tagging_misclassification_for_edit() -> None
     assert routed.source == "llm"
     assert routed.plan.action == WebAction.edit
     assert routed.plan.edit_instruction == "夜っぽくして"
+
+
+def test_ui_output_count_overrides_small_model_variant_count() -> None:
+    client = FakeLLMClient(
+        '{"action":"edit","scene_description":"","edit_instruction":"夜にする",'
+        '"variants":1,"preserve":[],"reason":"編集"}'
+    )
+
+    routed = NaturalLanguageRouter(client).route(
+        RouteRequest(instruction="夜にする", has_image=True, default_variants=4)
+    )
+
+    assert routed.plan.variants == 4

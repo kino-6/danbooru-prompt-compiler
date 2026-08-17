@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Callable
 
 from .compiler import PromptCompiler
-from .formatter import OutputFormat, SUBJECT_TAGS, format_variant, group_tags
+from .formatter import (
+    OutputFormat,
+    SUBJECT_TAGS,
+    format_clipboard_text,
+    format_variant,
+    group_tags,
+)
 from .image_tagger import (
     CHARACTER_CATEGORY,
     GENERAL_CATEGORY,
@@ -76,7 +82,7 @@ class WebPromptService:
         general_threshold: float = 0.35,
         character_threshold: float = 0.85,
         max_image_tags: int = 50,
-        variants: int = 3,
+        variants: int = 4,
         edited_tags: str = "",
         action_override: str = "auto",
         use_vision: bool = False,
@@ -131,7 +137,7 @@ class WebPromptService:
                     image_result=image_result,
                     image_cache_hit=image_cache_hit,
                 ),
-                candidates=[format_variant(inferred_names, OutputFormat.flat)],
+                candidates=[format_clipboard_text(inferred_names, OutputFormat.grouped)],
             )
             _report_progress(on_progress, "complete", 1.0)
             return result
@@ -176,7 +182,9 @@ class WebPromptService:
                     routed.plan.edit_instruction or clean_instruction
                 ),
             )
-        candidates = [format_variant(tags, OutputFormat.flat) for tags in output_variants]
+        candidates = [
+            format_clipboard_text(tags, OutputFormat.grouped) for tags in output_variants
+        ]
         rendered_variants = [
             _render_candidate(index, candidate, multiple=len(candidates) > 1)
             for index, candidate in enumerate(candidates, start=1)

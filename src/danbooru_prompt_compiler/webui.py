@@ -211,17 +211,23 @@ def build_app(*, service: WebPromptService | None = None):
                     placeholder="画像の代わりに既存タグを編集するときに入力",
                     lines=4,
                 )
-                action_override_input = gr.Dropdown(
-                    choices=[
-                        ("自動判定", "auto"),
-                        ("画像タグ抽出", "tag_image"),
-                        ("新規プロンプト", "compile"),
-                        ("既存プロンプト編集", "edit"),
-                        ("次のコマ", "next_panel"),
-                    ],
-                    value="auto",
-                    label="操作種別",
-                )
+                with gr.Row():
+                    action_override_input = gr.Dropdown(
+                        choices=[
+                            ("自動判定", "auto"),
+                            ("画像タグ抽出", "tag_image"),
+                            ("新規プロンプト", "compile"),
+                            ("既存プロンプト編集", "edit"),
+                            ("次のコマ", "next_panel"),
+                        ],
+                        value="auto",
+                        label="操作種別",
+                    )
+                    variants_input = gr.Radio(
+                        choices=[1, 2, 3, 4],
+                        value=4,
+                        label="出力数",
+                    )
                 with gr.Row():
                     run_button = gr.Button("実行", variant="primary")
                     cancel_button = gr.Button("停止", variant="stop")
@@ -264,7 +270,6 @@ def build_app(*, service: WebPromptService | None = None):
                 max_image_tags_input = gr.Slider(
                     1, 100, value=50, step=1, label="画像タグ上限"
                 )
-                variants_input = gr.Slider(1, 4, value=3, step=1, label="候補数")
 
         with gr.Row():
             action_plan_output = gr.JSON(label="実行計画")

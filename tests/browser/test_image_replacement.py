@@ -44,9 +44,9 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
     image = tmp_path / "input.png"
     Image.new("RGB", (4, 4), "red").save(image)
     prompts = [
-        "1girl, solo, rain",
-        "1girl, solo, night",
-        "1girl, solo, looking_back",
+        "1girl, solo\nrain",
+        "1girl, solo\nnight",
+        "1girl, solo\nlooking_back",
     ]
 
     with running_test_webui(candidates=prompts) as (url, _service):

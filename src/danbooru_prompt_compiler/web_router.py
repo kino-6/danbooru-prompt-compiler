@@ -148,7 +148,9 @@ def _parse_action_plan(raw_output: str) -> ActionPlan:
 
 def _normalize_plan(plan: ActionPlan, request: RouteRequest) -> ActionPlan:
     values = plan.model_dump()
-    values["variants"] = min(max(plan.variants or request.default_variants, 1), 4)
+    # The explicit UI selection is authoritative. A small router model should
+    # never silently reduce the number of requested outputs.
+    values["variants"] = min(max(request.default_variants, 1), 4)
 
     strong_action = _strong_rule_action(request)
     if strong_action is not None:

@@ -33,6 +33,13 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["ポーズ・位置関係の解析にVLMを使う"]["props"]["value"] is False
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert "選択中画像" in components
+    assert components["出力数"]["props"]["value"] == 4
+    assert [value for _label, value in components["出力数"]["props"]["choices"]] == [
+        1,
+        2,
+        3,
+        4,
+    ]
 
 
 def test_drop_acceptance_keeps_active_path_and_resets_drop_zone() -> None:

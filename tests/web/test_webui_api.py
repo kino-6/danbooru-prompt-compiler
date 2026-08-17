@@ -45,9 +45,9 @@ def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:
     Image.new("RGB", (2, 2), "red").save(first)
     Image.new("RGB", (2, 2), "blue").save(second)
     prompts = [
-        "1girl, solo, rain",
-        "1girl, solo, night",
-        "1girl, solo, looking_back",
+        "1girl, solo\nrain",
+        "1girl, solo\nnight",
+        "1girl, solo\nlooking_back",
     ]
 
     handler = functools.partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
