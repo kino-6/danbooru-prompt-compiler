@@ -231,7 +231,7 @@ def test_exclusion_words_can_be_saved_and_reset_from_the_ui(tmp_path) -> None:
     assert {"除外ワードを保存", "既定に戻す"} <= buttons
 
 
-def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:
+def test_webui_has_cancel_dependencies_for_every_run_trigger() -> None:
     app = build_app()
     cancel_dependencies = [
         dependency
@@ -244,7 +244,39 @@ def test_webui_has_cancel_dependencies_for_run_and_submit() -> None:
         for dependency in cancel_dependencies
         for dependency_id in dependency["cancels"]
     }
-    assert len(cancelled_ids) == 2
+    run_ids = {
+        dependency["id"]
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") in {"run_prompt_workbench", "run_next_panel"}
+        or (dependency.get("targets") and dependency.get("trigger") == "submit")
+    }
+    # 実行, 次のコマ, and instruction submit.
+    assert len(cancelled_ids) == 3
+    assert run_ids <= cancelled_ids
+
+
+def test_next_panel_button_runs_without_an_instruction() -> None:
+    app = build_app()
+    next_panel_dependency = next(
+        dependency
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") == "run_next_panel"
+    )
+    run_dependency = next(
+        dependency
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") == "run_prompt_workbench"
+    )
+    buttons = {
+        component["props"].get("value")
+        for component in app.config["components"]
+        if component.get("type") == "button"
+    }
+
+    assert "次のコマ" in buttons
+    # The same inputs and outputs as 実行; only the action differs.
+    assert next_panel_dependency["inputs"] == run_dependency["inputs"]
+    assert next_panel_dependency["outputs"] == run_dependency["outputs"]
 
 
 def test_webui_exposes_candidate_adoption_and_history_controls() -> None:

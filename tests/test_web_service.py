@@ -141,6 +141,34 @@ def test_service_can_run_image_tagging_without_prompt_compiler() -> None:
     assert "subject: 1girl" in result.output
 
 
+def test_next_panel_runs_from_an_image_without_an_instruction() -> None:
+    compiler = TwoVariantCompiler()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("manual next_panel must not consult the router")
+        ),
+        compiler_factory=lambda _url, _model: compiler,
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="",
+        base_prompt="",
+        general_threshold=0.4,
+        action_override="next_panel",
+        variants=2,
+    )
+
+    assert result.action_plan["action"] == "next_panel"
+    assert result.action_plan["router_source"] == "manual"
+    assert compiler.last_request.scene_description == "1girl, rain, power_(chainsaw_man)"
+    assert "自然な続きを提案する" in compiler.last_request.edit_instruction
+    # The tagged character survives into every proposed next panel.
+    assert all("1girl" in candidate for candidate in result.candidates)
+    assert len(result.candidates) == 2
+
+
 def test_service_excludes_censor_tags_from_image_tags_and_prompt_output() -> None:
     plan = ActionPlan(action=WebAction.edit, edit_instruction="夜にして", reason="edit")
     compiler = CensoredOutputCompiler()
