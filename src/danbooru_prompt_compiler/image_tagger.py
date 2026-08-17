@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 
 DEFAULT_TAGGER_MODEL = "SmilingWolf/wd-vit-tagger-v3"
@@ -41,6 +41,15 @@ class ImageTagResult:
         return [tag.name for tag in self.tags]
 
 
+@dataclass(frozen=True)
+class ImageTaggerRuntime:
+    labels: list[TagLabel]
+    session: Any
+    input_name: str
+    output_name: str
+    target_size: int
+
+
 class ImageTagger:
     """Run a Waifu Diffusion ONNX tagger against a local image."""
 
@@ -52,6 +61,7 @@ class ImageTagger:
     ) -> None:
         self.model_repo = model_repo
         self.cache_dir = cache_dir
+        self._runtime: ImageTaggerRuntime | None = None
 
     def predict(
         self,
@@ -68,9 +78,45 @@ class ImageTagger:
 
         try:
             import numpy as np
+            from PIL import Image, ImageOps
+        except ModuleNotFoundError as exc:  # pragma: no cover - packaging guard
+            raise RuntimeError(
+                "Image tagging dependencies are missing; run 'uv sync --group test'."
+            ) from exc
+
+        runtime = self._get_runtime()
+
+        with Image.open(image_path) as opened_image:
+            image = ImageOps.exif_transpose(opened_image).convert("RGBA")
+            image_array = prepare_image(image, runtime.target_size)
+
+        predictions = runtime.session.run(
+            [runtime.output_name],
+            {runtime.input_name: image_array},
+        )[0]
+        scores = np.asarray(predictions[0], dtype=float)
+        if len(runtime.labels) != len(scores):
+            raise ValueError(
+                f"Model returned {len(scores)} scores for {len(runtime.labels)} tag labels."
+            )
+
+        return select_tags(
+            runtime.labels,
+            scores,
+            general_threshold=general_threshold,
+            character_threshold=character_threshold,
+            max_tags=max_tags,
+        )
+
+    def _get_runtime(self) -> ImageTaggerRuntime:
+        if self._runtime is None:
+            self._runtime = self._load_runtime()
+        return self._runtime
+
+    def _load_runtime(self) -> ImageTaggerRuntime:
+        try:
             import onnxruntime as ort
             from huggingface_hub import hf_hub_download
-            from PIL import Image, ImageOps
         except ModuleNotFoundError as exc:  # pragma: no cover - packaging guard
             raise RuntimeError(
                 "Image tagging dependencies are missing; run 'uv sync --group test'."
@@ -80,7 +126,6 @@ class ImageTagger:
         label_path = hf_hub_download(filename=LABEL_FILENAME, **download_args)
         model_path = hf_hub_download(filename=MODEL_FILENAME, **download_args)
         labels = load_labels(Path(label_path))
-
         session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         model_input = session.get_inputs()[0]
         target_height, target_width = model_input.shape[1:3]
@@ -88,25 +133,12 @@ class ImageTagger:
             raise ValueError(f"Unsupported dynamic model input shape: {model_input.shape}")
         if target_height != target_width:
             raise ValueError(f"Expected a square model input, got: {model_input.shape}")
-
-        with Image.open(image_path) as opened_image:
-            image = ImageOps.exif_transpose(opened_image).convert("RGBA")
-            image_array = prepare_image(image, target_height)
-
-        output_name = session.get_outputs()[0].name
-        predictions = session.run([output_name], {model_input.name: image_array})[0]
-        scores = np.asarray(predictions[0], dtype=float)
-        if len(labels) != len(scores):
-            raise ValueError(
-                f"Model returned {len(scores)} scores for {len(labels)} tag labels."
-            )
-
-        return select_tags(
-            labels,
-            scores,
-            general_threshold=general_threshold,
-            character_threshold=character_threshold,
-            max_tags=max_tags,
+        return ImageTaggerRuntime(
+            labels=labels,
+            session=session,
+            input_name=model_input.name,
+            output_name=session.get_outputs()[0].name,
+            target_size=target_height,
         )
 
 

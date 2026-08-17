@@ -48,6 +48,33 @@ uv run danbooru-prompt --image path/to/image.png --general-threshold 0.4 --chara
 
 The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-tagger-v3). It runs locally through ONNX Runtime; the roughly 379 MB model is downloaded to the Hugging Face cache on first use. General and character tags use separate default thresholds of `0.35` and `0.85`, and output keeps canonical Danbooru underscores.
 
+## Web UI Prototype
+
+Install the optional Web UI dependency and pull the lightweight instruction router and prompt model:
+
+```bash
+uv sync --extra web --group test
+ollama pull qwen3:1.7b
+```
+
+Launch the local workbench:
+
+```bash
+uv run danbooru-prompt-web
+```
+
+Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
+
+The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes the current image, then the text model proposes the next prompt while preserving requested elements. It does not yet inspect spatial relationships with a vision-language model.
+
+The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable, and the action selector can override automatic routing. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
+
+For requests that depend on pose, gaze, held objects, or spatial relationships, enable `ポーズ・位置関係の解析にVLMを使う` and configure an Ollama vision model such as `qwen3-vl:8b`. VLM use is opt-in and limited to image edits and next-panel requests. The advanced settings also provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
+
+Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.
+
+Tags that reliably lower image quality are dropped from both the inferred image tags and the generated prompts. The default exclusion words are `simple_background, halftone, *_background, censored, *_censor, *_censoring`; `*` matches any characters, so `*_censor` covers `bar_censor` and `mosaic_censoring` is covered by `*_censoring`. Edit the list under `詳細設定 → 除外ワード`, then press `除外ワードを保存` to persist it to `data/excluded_tags.json` and reuse it on the next launch, or `既定に戻す` to restore the defaults. Removed tags are reported in `実行情報` as `Filtered image tags` and `Filtered prompt tags`.
+
 Create a prompt from a natural-language instruction:
 
 ```bash
@@ -211,6 +238,9 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `compiler.py`: core reusable compiler logic (independent from CLI layer).
 - `cli.py`: Typer command interface.
 - `image_tagger.py`: local ONNX image-to-Danbooru-tag inference.
+- `web_router.py`: constrained natural-language instruction routing with a rule fallback.
+- `web_service.py`: orchestration shared by the Web UI and tests.
+- `webui.py`: local Gradio workbench.
 - `llm.py`: provider abstraction (`LLMClient`) + `OllamaClient` implementation.
 - `normalizer.py`: parsing and normalization utilities.
 - `formatter.py`: copy-ready and grouped prompt output formatting.
@@ -218,6 +248,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `reference_tags.py`: reference tag loading, auto-subset selection, and max-tag estimation.
 - `seed_tags.py`: seed tag inference for Danbooru post lookup.
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
+- `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.
 

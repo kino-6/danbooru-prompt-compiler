@@ -24,12 +24,15 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8.0.0"]
+web = ["gradio>=6.0.0,<7.0.0"]
 
 [dependency-groups]
 test = ["pytest>=8.0.0"]
+web-test = ["pytest-playwright>=0.7.0,<1.0.0"]
 
 [project.scripts]
 danbooru-prompt = "danbooru_prompt_compiler.cli:app"
+danbooru-prompt-web = "danbooru_prompt_compiler.webui:web_app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -38,4 +41,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]

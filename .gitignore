@@ -209,6 +209,9 @@ tempCodeRunnerFile.py
 # Generated Danbooru tag subsets
 data/subsets/
 
+# Web UI exclusion words saved from the browser
+data/excluded_tags.json
+
 # PyPI configuration file
 .pypirc
 

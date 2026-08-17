@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import base64
+import tempfile
+from pathlib import Path
+
+import httpx
+import pytest
+
+from danbooru_prompt_compiler.image_source import (
+    download_image_url,
+    load_image_url_preview,
+    resolve_image_source,
+)
+
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+    "AScY42YAAAAASUVORK5CYII="
+)
+PUBLIC_RESOLVER = lambda _host: ["93.184.216.34"]
+
+
+def _client(content: bytes, content_type: str = "image/png") -> httpx.Client:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": content_type},
+            content=content,
+            request=request,
+        )
+    )
+    return httpx.Client(transport=transport)
+
+
+def test_uploaded_image_takes_precedence_over_url() -> None:
+    with resolve_image_source("uploaded.png", "https://example.com/image.png") as path:
+        assert path == "uploaded.png"
+
+
+def test_url_image_is_downloaded_and_removed_after_request() -> None:
+    with _client(PNG_1X1) as client:
+        with download_image_url(
+            "https://example.com/image.png",
+            client=client,
+            resolver=PUBLIC_RESOLVER,
+        ) as path:
+            assert path.exists()
+            assert path.read_bytes() == PNG_1X1
+            temporary_path = path
+
+    assert not temporary_path.exists()
+
+
+@pytest.mark.parametrize("url", ["file:///tmp/image.png", "data:image/png;base64,abc"])
+def test_url_image_requires_http_or_https(url: str) -> None:
+    with pytest.raises(ValueError, match="http://"):
+        with download_image_url(url):
+            pass
+
+
+def test_url_image_rejects_non_image_response() -> None:
+    with _client(b"not an image", "text/html") as client:
+        with pytest.raises(ValueError, match="画像ではありません"):
+            with download_image_url(
+                "https://example.com/page",
+                client=client,
+                resolver=PUBLIC_RESOLVER,
+            ):
+                pass
+
+
+def test_url_image_rejects_oversized_response_and_cleans_up() -> None:
+    temp_dir = Path(tempfile.gettempdir())
+    before = set(temp_dir.glob("danbooru-prompt-url-*"))
+    with _client(PNG_1X1) as client:
+        with pytest.raises(ValueError, match="20 MB"):
+            with download_image_url(
+                "https://example.com/image.png",
+                client=client,
+                max_bytes=8,
+                resolver=PUBLIC_RESOLVER,
+            ):
+                pass
+    assert set(temp_dir.glob("danbooru-prompt-url-*")) == before
+
+
+def test_url_image_rejects_private_host_before_request() -> None:
+    requested = False
+
+    def handler(request):
+        nonlocal requested
+        requested = True
+        return httpx.Response(200, content=PNG_1X1, request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="プライベート"):
+            with download_image_url(
+                "http://internal.example/image.png",
+                client=client,
+                resolver=lambda _host: ["127.0.0.1"],
+            ):
+                pass
+
+    assert requested is False
+
+
+def test_url_image_rejects_private_redirect_before_following_it() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request):
+        requested_hosts.append(request.url.host)
+        return httpx.Response(
+            302,
+            headers={"location": "http://127.0.0.1/private.png"},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="プライベート"):
+            with download_image_url(
+                "https://example.com/image.png",
+                client=client,
+                resolver=lambda host: (
+                    ["93.184.216.34"] if host == "example.com" else ["127.0.0.1"]
+                ),
+            ):
+                pass
+
+    assert requested_hosts == ["example.com"]
+
+
+def test_url_preview_returns_image_and_removes_temporary_file() -> None:
+    temp_dir = Path(tempfile.gettempdir())
+    before = set(temp_dir.glob("danbooru-prompt-url-*"))
+    with _client(PNG_1X1) as client:
+        preview = load_image_url_preview(
+            "https://example.com/image.png",
+            client=client,
+            resolver=PUBLIC_RESOLVER,
+        )
+
+    assert preview.size == (1, 1)
+    assert set(temp_dir.glob("danbooru-prompt-url-*")) == before

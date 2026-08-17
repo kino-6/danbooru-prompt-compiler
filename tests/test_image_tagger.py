@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from danbooru_prompt_compiler.image_tagger import (
+    ImageTagger,
     CHARACTER_CATEGORY,
     GENERAL_CATEGORY,
     RATING_CATEGORY,
@@ -9,6 +10,23 @@ from danbooru_prompt_compiler.image_tagger import (
     prepare_image,
     select_tags,
 )
+
+
+def test_image_tagger_initializes_runtime_once(monkeypatch) -> None:
+    tagger = ImageTagger()
+    runtime = object()
+    calls = 0
+
+    def load_runtime():
+        nonlocal calls
+        calls += 1
+        return runtime
+
+    monkeypatch.setattr(tagger, "_load_runtime", load_runtime)
+
+    assert tagger._get_runtime() is runtime
+    assert tagger._get_runtime() is runtime
+    assert calls == 1
 
 
 def test_select_tags_applies_category_thresholds_and_sorts_by_score() -> None:

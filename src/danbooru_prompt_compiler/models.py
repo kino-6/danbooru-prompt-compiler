@@ -45,6 +45,7 @@ class CompileResult(BaseModel):
 class LLMRequest(BaseModel):
     prompt: str
     variants: int = 1
+    image_paths: list[str] = Field(default_factory=list)
 
 
 class LLMResponse(BaseModel):
