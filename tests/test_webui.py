@@ -40,7 +40,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["ポーズ・位置関係の解析にVLMを使う"]["props"]["value"] is False
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert components["画像"]["props"]["interactive"] is True
-    assert components["画像"]["props"]["sources"] == ["upload", "clipboard"]
+    assert components["画像"]["props"]["sources"] == ["upload"]
     assert components["出力数"]["props"]["value"] == 4
     assert components["除外ワードを適用"]["props"]["value"] is True
     assert (
@@ -114,7 +114,9 @@ def test_pasted_clipboard_image_is_routed_into_the_image_workspace() -> None:
     assert '(item.type || "").startsWith("image/")' in script
     assert "'#image-workspace input[type=\"file\"]'" in script
     assert "input.files = transfer.files" in script
-    assert "clipboard" in _components_by_label(app)["画像"]["props"]["sources"]
+    # The paste event carries its own clipboardData, so the permission-prompting
+    # navigator.clipboard.read() source stays off.
+    assert "clipboard" not in _components_by_label(app)["画像"]["props"]["sources"]
 
 
 def test_exclusion_words_can_be_saved_and_reset_from_the_ui(tmp_path) -> None:

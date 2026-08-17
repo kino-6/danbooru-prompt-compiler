@@ -287,9 +287,9 @@ def build_app(*, service: WebPromptService | None = None):
             with gr.Column():
                 image_workspace = gr.Image(
                     type="filepath",
-                    sources=["upload", "clipboard"],
+                    sources=["upload"],
                     label="画像",
-                    placeholder="ここへ画像をドロップ、クリックして選択、または貼り付け",
+                    placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
                     height=400,
                     interactive=True,
                     elem_id="image-workspace",
