@@ -123,4 +123,4 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 
 - [x] Unit and API tests prove three candidates populate output boxes 1–3 independently.
 - [x] Component configuration proves all four boxes are visible, editable, and copy-enabled.
-- [ ] Chromium E2E proves three candidates are simultaneously visible, editable, and contain copy-ready text.
+- [x] Chromium E2E proves three candidates are simultaneously visible, editable, and contain copy-ready text.
