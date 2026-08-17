@@ -150,4 +150,4 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit tests prove default filtering, wildcard matching, and disabling the filter.
 - [x] Gradio configuration exposes enabled-by-default folded filter controls.
 - [x] Chromium E2E proves replacing an image clears old image-dependent prompt state.
-- [ ] The full test suite and CI pass.
+- [x] The full test suite and CI pass (83 passed, 1 browser-only skip; 2 Chromium E2E passed).
