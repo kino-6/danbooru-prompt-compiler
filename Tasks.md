@@ -137,4 +137,4 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit tests prove organized multiline output and authoritative count selection.
 - [x] Component configuration exposes output count 1–4 with default 4.
 - [x] Real-service API returns four independent multiline prompts when output count is 4.
-- [ ] Chromium E2E passes with multiline prompt values.
+- [x] Chromium E2E passes with multiline prompt values.
