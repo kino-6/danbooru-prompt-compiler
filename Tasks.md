@@ -192,3 +192,76 @@ Tasks are executed in order. A task is complete only when every Gate is checked.
 - [x] Unit test proves the permission-prompting clipboard source stays disabled.
 - [x] Chromium E2E proves a pasted image becomes the active image and produces a run.
 - [x] The full test suite and CI pass (93 passed, 1 browser-only skip; 4 Chromium E2E passed).
+
+## Task 16 — Run the unit suite in CI
+
+The `Web UI E2E` workflow only runs `tests/web` and `tests/browser`, so the 93 unit
+tests are verified locally but never on a pull request.
+
+- [ ] Run `uv run pytest -q` in CI on pull requests and pushes to `main`.
+- [ ] Keep the browser job separate so a missing Chromium never blocks unit feedback.
+- [ ] Verify the workflow on Python 3.11, matching the local environment.
+
+### Gate
+
+- [ ] A pull request shows a failing unit job when a unit test is broken on purpose.
+- [ ] The browser job still installs Chromium and passes.
+
+## Task 17 — Share exclusion words with the CLI
+
+Exclusion words only exist on the Web UI path. `danbooru-prompt --image` and the plain
+compiler still emit `censored` and other quality-degrading tags.
+
+- [ ] Apply the saved exclusion words to CLI image tagging and prompt output.
+- [ ] Add `--excluded-tags` and `--no-tag-exclusions` options that override the saved list.
+- [ ] Report removed tags in the CLI diagnostics section, as the Web UI status does.
+
+### Gate
+
+- [ ] Unit tests prove the CLI drops censor tags from image tags and compiled output.
+- [ ] Unit test proves the CLI options override the saved list.
+- [ ] README documents the shared exclusion words for both entry points.
+
+## Task 18 — Keep the requested tag count after exclusions
+
+Exclusions run after the compiler truncates to `max_output_tags`, so a variant that
+contains excluded tags returns fewer tags than requested.
+
+- [ ] Pass the exact-match exclusion words to the compiler as tags it must never output.
+- [ ] Request enough headroom so post-filter output still reaches the requested count.
+- [ ] Leave wildcard rules to the deterministic post-filter.
+
+### Gate
+
+- [ ] Unit test proves the compile prompt names the excluded tags.
+- [ ] Unit test proves a variant whose raw output contains excluded tags still returns the
+      requested tag count.
+
+## Task 19 — Replace the positional Web UI input list with a request model
+
+`run_prompt_workbench` takes 19 positional inputs whose order is duplicated in
+`webui.py`, `web_service.py`, and `tests/web/test_webui_api.py`. Inserting a control in
+the middle silently breaks the named API.
+
+- [ ] Introduce a `WebRunRequest` model that carries every run parameter.
+- [ ] Build the Gradio `inputs` list from a single ordered definition.
+- [ ] Have the API E2E construct its arguments from that definition instead of a literal list.
+
+### Gate
+
+- [ ] Unit test proves the Gradio input order matches the request model field order.
+- [ ] Adding a control does not require editing the API E2E argument list.
+
+## Task 20 — Split the Web UI layout from its behavior
+
+`build_app` is a single ~400-line function that mixes layout, event wiring, and handlers,
+so component changes cannot be unit tested without building the whole app.
+
+- [ ] Extract the image workspace, advanced settings, and output sections into builders.
+- [ ] Move the request handler out of `build_app` so it can be tested without Gradio.
+- [ ] Keep component `elem_id`s stable so the browser tests are unaffected.
+
+### Gate
+
+- [ ] Unit test exercises the request handler without constructing a Gradio app.
+- [ ] Existing Web UI unit, API, and browser tests pass unchanged.
