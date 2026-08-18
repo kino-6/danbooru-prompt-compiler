@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
+from danbooru_prompt_compiler import webui
 from danbooru_prompt_compiler.web_service import (
     WEB_RUN_FIELDS,
     WebRunRequest,
     WebRunResult,
 )
-from danbooru_prompt_compiler.webui import run_workbench
+from danbooru_prompt_compiler.webui import recover_vision_model, run_workbench
 
 
 class RecordingService:
@@ -168,6 +171,29 @@ def test_next_panel_follow_up_can_be_switched_off() -> None:
     assert outputs.prompts == ["current", "", "", ""]
 
 
+def test_recovering_the_vision_model_clears_the_cached_description() -> None:
+    class CachingService(RecordingService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleared = 0
+
+        def clear_description_cache(self) -> None:
+            self.cleared += 1
+
+    service = CachingService()
+
+    with mock.patch.object(
+        webui,
+        "restart_ollama_model",
+        lambda url, model: f"restarted {model} at {url}",
+    ):
+        message = recover_vision_model(service, "http://localhost:11434", "qwen3-vl:8b")
+
+    # A stale cached description would hide the recovered model.
+    assert service.cleared == 1
+    assert message == "restarted qwen3-vl:8b at http://localhost:11434"
+
+
 def test_run_workbench_keeps_the_edited_description_after_a_failure() -> None:
     outputs = run_workbench(
         RecordingService(error=ValueError("画像を入力してください。")),
@@ -237,6 +263,10 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload"]
     assert components["出力数"]["props"]["value"] == 4
+    change_props = components["次のコマの変化量"]["props"]
+    assert (change_props["minimum"], change_props["maximum"]) == (0.0, 1.0)
+    assert change_props["value"] == 0.5
+    assert _folded_ancestor_labels(app, "next-panel-change") == []
     assert components["除外ワードを適用"]["props"]["value"] is True
     assert (
         components["除外ワード（カンマ区切り、*使用可）"]["props"]["value"]
@@ -302,9 +332,15 @@ def test_vision_controls_are_visible_without_opening_a_section() -> None:
     assert _folded_ancestor_labels(app, "base-prompt-input") == [
         "既存プロンプトから編集（任意）"
     ]
-    # The description is worthless if the switch that fills it, or the box it
-    # lands in, is hidden inside a collapsed section.
+    # The description is worthless if the switch that fills it, the box it
+    # lands in, or its recovery command is hidden inside a collapsed section.
     assert _folded_ancestor_labels(app, "image-description-editor") == []
+    assert _folded_ancestor_labels(app, "recover-vision-button") == []
+    assert "VLMを復旧" in {
+        component["props"].get("value")
+        for component in app.config["components"]
+        if component.get("type") == "button"
+    }
     assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["画像の説明（VLM）"]["props"]["interactive"] is True
 
@@ -361,6 +397,7 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     assert input_labels[WEB_RUN_FIELDS.index("instruction")] == "どうしたい？"
     assert input_labels[WEB_RUN_FIELDS.index("variants")] == "出力数"
     assert input_labels[WEB_RUN_FIELDS.index("edited_description")] == "画像の説明（VLM）"
+    assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "次のコマの変化量"
     assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"

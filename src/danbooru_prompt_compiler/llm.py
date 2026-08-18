@@ -43,8 +43,15 @@ class OllamaClient(LLMClient):
                     "prompt": request.prompt,
                     "stream": False,
                 }
-                if self.temperature is not None:
-                    payload["options"] = {"temperature": self.temperature}
+                # A per-request temperature wins, so one client can serve both
+                # deterministic and deliberately varied generations.
+                temperature = (
+                    request.temperature
+                    if request.temperature is not None
+                    else self.temperature
+                )
+                if temperature is not None:
+                    payload["options"] = {"temperature": temperature}
                 if self.json_schema is not None:
                     payload["format"] = self.json_schema
                 elif self.json_mode:

@@ -36,6 +36,7 @@ class CompileRequest(BaseModel):
     tag_subset: list[str] = Field(default_factory=list)
     max_output_tags: int = Field(default=20, ge=1, le=100)
     excluded_tags: list[str] = Field(default_factory=list)
+    temperature: float | None = None
 
 
 class CompileResult(BaseModel):
@@ -48,6 +49,7 @@ class LLMRequest(BaseModel):
     prompt: str
     variants: int = 1
     image_paths: list[str] = Field(default_factory=list)
+    temperature: float | None = None
 
 
 class LLMResponse(BaseModel):

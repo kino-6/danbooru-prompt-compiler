@@ -59,7 +59,13 @@ class PromptCompiler:
 
     def compile(self, request: CompileRequest) -> CompileResult:
         prompt = self.build_prompt(request)
-        llm_response = self.llm_client.generate(LLMRequest(prompt=prompt, variants=request.variants))
+        llm_response = self.llm_client.generate(
+            LLMRequest(
+                prompt=prompt,
+                variants=request.variants,
+                temperature=request.temperature,
+            )
+        )
 
         all_variants: list[list[str]] = []
         unknown: list[str] = []
