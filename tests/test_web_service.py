@@ -101,6 +101,30 @@ class TwoVariantCompiler(FakeCompiler):
         )
 
 
+class ClothedTagger:
+    def predict(self, _image_path: Path, **_options) -> ImageTagResult:
+        return ImageTagResult(
+            tags=[
+                PredictedTag("1girl", 0.99, GENERAL_CATEGORY),
+                PredictedTag("long_hair", 0.95, GENERAL_CATEGORY),
+                PredictedTag("school_uniform", 0.9, GENERAL_CATEGORY),
+            ],
+            rating=None,
+        )
+
+
+class PlainNextPanelCompiler(FakeCompiler):
+    """Returns a panel that mentions neither the outfit nor the hair."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tag_dictionary = {"1girl", "long_hair", "school_uniform", "running"}
+
+    def compile(self, request) -> CompileResult:
+        self.last_request = request
+        return CompileResult(variants=[["1girl", "running"]], unknown_tags=[])
+
+
 class CensoredOutputCompiler(FakeCompiler):
     def compile(self, request) -> CompileResult:
         self.last_request = request
@@ -294,12 +318,72 @@ def test_service_uses_inferred_tags_as_next_panel_base() -> None:
     )
 
     assert compiler.last_request.scene_description == "1girl, rain, power_(chainsaw_man)"
-    assert "次のコマとして" in compiler.last_request.edit_instruction
-    assert "character, clothing" in compiler.last_request.edit_instruction
+    # The change amount, not the routed plan, decides what is held fixed.
+    assert "維持する要素: character, appearance" in compiler.last_request.edit_instruction
     assert "looking_back" in result.output
     assert "power_(chainsaw_man)" in result.output
     assert "power_chainsaw_man" not in result.output
     assert "moment_after" not in result.output
+
+
+@pytest.mark.parametrize(
+    "change, preserved, temperature",
+    [
+        (0.0, "character, appearance, clothing", 0.0),
+        (0.5, "character, appearance", 0.5),
+        (1.0, "character", 0.85),
+    ],
+)
+def test_next_panel_change_controls_what_is_held_fixed(
+    change: float,
+    preserved: str,
+    temperature: float,
+) -> None:
+    plan = ActionPlan(
+        action=WebAction.next_panel,
+        variants=1,
+        preserve=["character", "appearance", "clothing"],
+    )
+    compiler = FakeCompiler()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: compiler,
+    )
+
+    service.run(
+        image_path="sample.png",
+        instruction="次のコマ",
+        base_prompt="",
+        general_threshold=0.4,
+        next_panel_change=change,
+    )
+
+    assert f"維持する要素: {preserved}。" in compiler.last_request.edit_instruction
+    # A deterministic model returns near-identical variants, so the temperature
+    # rises with the requested amount of change.
+    assert compiler.last_request.temperature == temperature
+
+
+def test_a_large_next_panel_change_stops_pinning_clothing_tags() -> None:
+    plan = ActionPlan(action=WebAction.next_panel, variants=1)
+    service = WebPromptService(
+        tagger=ClothedTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: PlainNextPanelCompiler(),
+    )
+    options = dict(
+        image_path="sample.png",
+        instruction="次のコマ",
+        base_prompt="",
+    )
+
+    small = service.run(next_panel_change=0.0, **options)
+    large = service.run(next_panel_change=1.0, **options)
+
+    assert "school_uniform" in small.candidates[0]
+    assert "school_uniform" not in large.candidates[0]
+    assert "1girl" in large.candidates[0]
 
 
 def test_service_uses_human_edited_tags_as_compiler_input() -> None:

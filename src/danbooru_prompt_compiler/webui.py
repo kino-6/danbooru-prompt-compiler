@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import typer
 
 from .image_source import load_image_url_preview, resolve_image_source
-from .ollama_diagnostics import check_ollama, format_ollama_error
+from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -16,6 +16,7 @@ from .tag_filter import (
 )
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
+    DEFAULT_NEXT_PANEL_CHANGE,
     DEFAULT_OLLAMA_URL,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_VISION_MODEL,
@@ -192,6 +193,18 @@ def diagnose_ollama(
     if use_vision:
         required.append(vision_model)
     return check_ollama(ollama_url, required).message
+
+
+def recover_vision_model(
+    service: WebPromptService,
+    ollama_url: str,
+    vision_model: str,
+) -> str:
+    """Drop the cached description and reload the model that stopped answering."""
+    clear_cache = getattr(service, "clear_description_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    return restart_ollama_model(ollama_url, vision_model)
 
 
 @dataclass(frozen=True)
@@ -468,6 +481,15 @@ def build_app(*, service: WebPromptService | None = None):
             outputs=settings.diagnostic_output,
             queue=False,
         )
+        image.recover_vision_button.click(
+            lambda ollama_url, vision_model: recover_vision_model(
+                prompt_service, ollama_url, vision_model
+            ),
+            inputs=[settings.ollama_url, settings.vision_model],
+            outputs=image.recover_vision_status,
+            queue=False,
+            api_name="recover_vision_model",
+        )
         settings.save_excluded_tags_button.click(
             store_excluded_tags,
             inputs=settings.excluded_tags,
@@ -523,6 +545,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "max_image_tags": settings.max_image_tags,
         "variants": controls.variants,
         "generate_next_panel": controls.generate_next_panel,
+        "next_panel_change": controls.next_panel_change,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": settings.action_override,
@@ -589,6 +612,15 @@ def _build_image_column(gr) -> SimpleNamespace:
             label="VLMで画像を説明する",
             info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
         )
+        with gr.Row():
+            recover_vision_button = gr.Button(
+                "VLMを復旧",
+                elem_id="recover-vision-button",
+                size="sm",
+            )
+        recover_vision_status = gr.Markdown(
+            "VLMが応答しなくなったら押してください。モデルを解放して読み込み直します。"
+        )
         description = gr.Textbox(
             label="画像の説明（VLM）",
             lines=4,
@@ -610,6 +642,8 @@ def _build_image_column(gr) -> SimpleNamespace:
         url_button=url_button,
         use_vision=use_vision,
         description=description,
+        recover_vision_button=recover_vision_button,
+        recover_vision_status=recover_vision_status,
     )
 
 
@@ -632,6 +666,18 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             value=True,
             label="次のコマも生成する（出力2〜4）",
             info="出力1に現在の結果、出力2〜4に一瞬後の場面の候補を入れます。",
+        )
+        next_panel_change = gr.Slider(
+            0.0,
+            1.0,
+            value=DEFAULT_NEXT_PANEL_CHANGE,
+            step=0.1,
+            label="次のコマの変化量",
+            elem_id="next-panel-change",
+            info=(
+                "小さいほど元の画像に忠実で、大きいほど姿勢・構図・背景まで動きます。"
+                "0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。"
+            ),
         )
         with gr.Row():
             variants = gr.Radio(
@@ -656,6 +702,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         base_prompt=base_prompt,
         variants=variants,
         generate_next_panel=generate_next_panel,
+        next_panel_change=next_panel_change,
         run_button=run_button,
         next_panel_button=next_panel_button,
         cancel_button=cancel_button,

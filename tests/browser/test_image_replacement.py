@@ -107,6 +107,23 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
             browser.close()
 
 
+def test_recovery_and_change_controls_need_no_section_opened() -> None:
+    with running_test_webui() as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+
+            # Clicking would unload a real model on the developer's machine, so
+            # the behaviour is unit-tested and only reachability is checked here.
+            expect(
+                page.get_by_role("button", name="VLMを復旧", exact=True)
+            ).to_be_visible()
+            expect(page.locator("#next-panel-change")).to_be_visible()
+            expect(page.locator("#run-status")).to_be_attached()
+            browser.close()
+
+
 def test_next_panel_proposals_fill_the_boxes_after_the_current_prompt(tmp_path) -> None:
     image = tmp_path / "panel.png"
     Image.new("RGB", (4, 4), "teal").save(image)

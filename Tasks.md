@@ -357,3 +357,27 @@ down while its error stayed inside the folded `実行情報` section.
 - [x] Chromium E2E proves the default run fills box 1 with the current prompt, boxes 2-4
       with panels, and shows the status without opening a section.
 - [x] The full test suite and CI pass (122 passed, 1 browser-only skip; 6 Chromium E2E passed).
+
+## Task 25 — Recover a wedged VLM and control how much a panel changes
+
+A resident vision model that stops answering had no fix inside the UI, and next panels
+came back nearly identical to the current one: every preserved aspect is force-prefixed
+onto the variant, and the compiler ran at temperature `0.0`.
+
+- [x] Add a `VLMを復旧` command that unloads the model with `keep_alive: 0` and reloads it.
+- [x] Clear the cached description as part of the recovery.
+- [x] Report the exact `ollama pull` / `ollama serve` command when that is the real problem.
+- [x] Add a `次のコマの変化量` slider that narrows the preserved aspects and raises the
+      generation temperature together.
+- [x] Support a per-request temperature so one client serves deterministic and varied runs.
+- [x] Keep both controls out of the collapsed sections.
+
+### Gate
+
+- [x] Unit tests prove the recovery unloads then reloads, and explains an unreachable
+      Ollama, a missing model, and an empty model name.
+- [x] Unit test proves recovery clears the cached description.
+- [x] Unit tests prove each change level sets its preserved aspects and temperature.
+- [x] Unit test proves a large change stops pinning clothing tags onto the panel.
+- [x] Chromium E2E proves both controls are reachable without opening a section.
+- [x] The full test suite and CI pass (131 passed, 1 browser-only skip; 7 Chromium E2E passed).

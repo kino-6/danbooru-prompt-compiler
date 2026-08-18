@@ -82,3 +82,52 @@ def format_ollama_error(exc: Exception, configured_models: list[str]) -> str:
         )
         return f"Ollamaモデルが見つかりません。{commands}"
     return str(exc)
+
+
+def restart_ollama_model(
+    base_url: str,
+    model: str,
+    *,
+    client: httpx.Client | None = None,
+    load_timeout: float = 180.0,
+) -> str:
+    """Unload a wedged model and load it again, reporting what happened.
+
+    Ollama keeps a model resident between requests; when that instance stops
+    answering, the fix is to drop it with ``keep_alive: 0`` and let the next
+    request load a fresh one.
+    """
+    if not model.strip():
+        return "モデル名が空です。復旧するモデルを指定してください。"
+
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=load_timeout)
+    endpoint = f"{base_url.rstrip('/')}/api/generate"
+    try:
+        unload = http_client.post(endpoint, json={"model": model, "keep_alive": 0})
+        unload.raise_for_status()
+        reload_response = http_client.post(
+            endpoint,
+            json={"model": model, "prompt": "ok", "stream": False},
+        )
+        reload_response.raise_for_status()
+        return (
+            f"`{model}` を解放して読み込み直しました。もう一度実行してください。"
+        )
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return (
+            "Ollamaが応答しません。Ollama自体を再起動してから、もう一度お試しください。\n\n"
+            "```text\nollama ps\nollama stop " + model + "\nollama serve\n```"
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return (
+                f"`{model}` がインストールされていません。\n\n"
+                f"```text\nollama pull {model}\n```"
+            )
+        return f"復旧に失敗しました: {exc}"
+    except httpx.HTTPError as exc:
+        return f"復旧に失敗しました: {exc}"
+    finally:
+        if owns_client:
+            http_client.close()
