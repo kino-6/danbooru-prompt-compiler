@@ -1,0 +1,11 @@
+label: 絵コンテ／次のコマ
+order: 20
+task: Describe the next storyboard panel, one beat after the reference image.
+sections:
+  Subject: who is in the panel and what carries over unchanged from the reference
+  Action: what has just changed - movement, turn, gesture, or shift of gaze
+  Expression: facial expression and gaze after the change
+  Lighting: how the light reads in this beat, and whether it changed
+  Layout: camera distance and angle for this panel, and how it differs from the previous one
+  Details: secondary motion such as hair, cloth, props, or particles
+delivery: A single panel that reads as the moment immediately after the reference, same character and setting.

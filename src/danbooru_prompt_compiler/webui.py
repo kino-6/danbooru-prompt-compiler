@@ -8,6 +8,7 @@ import typer
 
 from .image_source import load_image_url_preview, resolve_image_source
 from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
+from .scene_prompt import load_templates
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -18,6 +19,7 @@ from .web_service import (
     DEFAULT_COMPILER_MODEL,
     DEFAULT_NEXT_PANEL_CHANGE,
     DEFAULT_OLLAMA_URL,
+    DEFAULT_SCENE_TEMPLATE,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_VISION_MODEL,
     WEB_RUN_FIELDS,
@@ -305,8 +307,13 @@ def _wants_next_panel_follow_up(request: WebRunRequest, result: WebRunResult) ->
     """Whether boxes 2-4 should hold next-panel proposals for this result."""
     if not request.generate_next_panel:
         return False
-    # An explicit next-panel run already fills every box with panels.
-    if result.action_plan.get("action") == "next_panel":
+    # A next-panel run already fills every box with panels, and a prose prompt
+    # would be followed by tag prompts in a different format. The request is
+    # checked as well as the result, so an explicit choice always wins.
+    followed_by_panels = {"next_panel", "scene_prompt"}
+    if request.action_override in followed_by_panels:
+        return False
+    if result.action_plan.get("action") in followed_by_panels:
         return False
     # The follow-up continues an existing prompt, so it needs one to continue.
     return bool(result.inferred_tags or request.base_prompt.strip())
@@ -362,6 +369,9 @@ def build_app(*, service: WebPromptService | None = None):
 
     def handle_request(*values, progress=gr.Progress()):
         return dispatch(values, progress)
+
+    def handle_scene_prompt(*values, progress=gr.Progress()):
+        return dispatch(values, progress, action_override="scene_prompt")
 
     def handle_next_panel(*values, progress=gr.Progress()):
         # An image alone is enough here; the router would otherwise read a
@@ -508,6 +518,13 @@ def build_app(*, service: WebPromptService | None = None):
             outputs=controls.base_prompt,
             queue=False,
         )
+        scene_prompt_event = controls.scene_prompt_button.click(
+            handle_scene_prompt,
+            inputs=inputs,
+            outputs=outputs,
+            api_name="run_scene_prompt",
+            concurrency_limit=1,
+        )
         submit_event = controls.instruction.submit(
             handle_request,
             inputs=inputs,
@@ -517,7 +534,7 @@ def build_app(*, service: WebPromptService | None = None):
         )
         controls.cancel_button.click(
             fn=None,
-            cancels=[run_event, next_panel_event, submit_event],
+            cancels=[run_event, next_panel_event, scene_prompt_event, submit_event],
             queue=False,
         )
         demo.load(
@@ -546,6 +563,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "variants": controls.variants,
         "generate_next_panel": controls.generate_next_panel,
         "next_panel_change": controls.next_panel_change,
+        "scene_template": controls.scene_template,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": settings.action_override,
@@ -686,11 +704,22 @@ def _build_instruction_column(gr) -> SimpleNamespace:
                 label="出力数",
                 info="「次のコマも生成する」がオフのときの出力数です。",
             )
+        scene_template = gr.Dropdown(
+            choices=[(template.label, template.name) for template in load_templates()],
+            value=DEFAULT_SCENE_TEMPLATE,
+            label="自然文プロンプトのテンプレート",
+            elem_id="scene-template",
+            info="「自然文プロンプト」で使う骨組みです。templates/ にYAMLを足せば増やせます。",
+        )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
             next_panel_button = gr.Button(
                 "次のコマ",
                 elem_id="next-panel-button",
+            )
+            scene_prompt_button = gr.Button(
+                "自然文プロンプト",
+                elem_id="scene-prompt-button",
             )
             cancel_button = gr.Button("停止", variant="stop")
         gr.Markdown(
@@ -703,6 +732,8 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         variants=variants,
         generate_next_panel=generate_next_panel,
         next_panel_change=next_panel_change,
+        scene_template=scene_template,
+        scene_prompt_button=scene_prompt_button,
         run_button=run_button,
         next_panel_button=next_panel_button,
         cancel_button=cancel_button,
@@ -740,6 +771,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 ("新規プロンプト", "compile"),
                 ("既存プロンプト編集", "edit"),
                 ("次のコマ", "next_panel"),
+                ("自然文プロンプト", "scene_prompt"),
             ],
             value="auto",
             label="操作種別",

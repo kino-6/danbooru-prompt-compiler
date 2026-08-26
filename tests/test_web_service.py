@@ -9,6 +9,7 @@ from danbooru_prompt_compiler.image_tagger import (
     PredictedTag,
 )
 from danbooru_prompt_compiler.models import CompileResult, LLMResponse
+from danbooru_prompt_compiler.scene_prompt import SceneTemplate
 from danbooru_prompt_compiler.web_router import ActionPlan, RoutedPlan, WebAction
 from danbooru_prompt_compiler.web_service import WebPromptService
 
@@ -193,6 +194,98 @@ def test_next_panel_runs_from_an_image_without_an_instruction() -> None:
     # The tagged character survives into every proposed next panel.
     assert all("1girl" in candidate for candidate in result.candidates)
     assert len(result.candidates) == 2
+
+
+class RecordingTextClient:
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = outputs
+        self.last_request = None
+
+    def generate(self, request):
+        self.last_request = request
+        return LLMResponse(outputs=self.outputs[: request.variants])
+
+
+SCENE_TEMPLATES = [
+    SceneTemplate(
+        name="demo",
+        label="デモ",
+        task="Produce a demo image.",
+        sections=[("Subject", "who is in it")],
+        delivery="One finished image.",
+    ),
+    SceneTemplate(
+        name="poster",
+        label="ポスター",
+        task="Produce a poster.",
+        sections=[("Subject", "hero element")],
+        delivery="One poster.",
+    ),
+]
+
+
+def test_scene_prompt_fills_the_selected_template_from_tags_and_description() -> None:
+    plan = ActionPlan(action=WebAction.scene_prompt)
+    text_client = RecordingTextClient(
+        ["Subject: a young woman on wet stone steps", "Subject: the same woman, closer"]
+    )
+    service = WebPromptService(
+        tagger=CensoredTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("a prose prompt must not run the tag compiler")
+        ),
+        text_factory=lambda _url, _model: text_client,
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="雨の日にして",
+        base_prompt="",
+        scene_template="poster",
+        variants=2,
+        edited_description="石段に立つ少女",
+    )
+
+    request = text_client.last_request.prompt
+    assert "Produce a poster." in request
+    assert "Subject: hero element" in request
+    # The filtered tags and the description are the raw material for the prose.
+    assert "1girl, rain" in request
+    assert "石段に立つ少女" in request
+    # The tags this image lost, plus the literal exclusion words, become the
+    # avoid line, spelled as words rather than as tags.
+    avoid_line = request.split("Never describe")[1]
+    assert "censored, bar censor, mosaic censoring" in avoid_line
+    assert "simple background" in avoid_line
+    assert result.candidates[0].startswith("Produce a poster.")
+    assert "Avoid: censored, bar censor, mosaic censoring" in result.candidates[0]
+    assert len(result.candidates) == 2
+
+
+class EmptyTagger:
+    def predict(self, _image_path: Path, **_options) -> ImageTagResult:
+        return ImageTagResult(tags=[], rating=None)
+
+
+def test_scene_prompt_needs_something_to_describe() -> None:
+    # An image the tagger found nothing in, with no instruction and no VLM,
+    # gets past the generic guard but leaves the prose model with nothing.
+    service = WebPromptService(
+        tagger=EmptyTagger(),
+        text_factory=lambda _url, _model: RecordingTextClient(["Subject: x"]),
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    with pytest.raises(ValueError, match="自然文プロンプト"):
+        service.run(
+            image_path="sample.png",
+            instruction="",
+            base_prompt="",
+            action_override="scene_prompt",
+            use_vision=False,
+        )
 
 
 def test_service_excludes_censor_tags_from_image_tags_and_prompt_output() -> None:

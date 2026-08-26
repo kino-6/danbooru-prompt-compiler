@@ -19,6 +19,12 @@ class WebAction(str, Enum):
     compile = "compile"
     edit = "edit"
     next_panel = "next_panel"
+    scene_prompt = "scene_prompt"
+
+
+# Natural-language prompts are a different output format, not a different
+# reading of the instruction, so only an explicit UI selection may choose one.
+MANUAL_ONLY_ACTIONS = {WebAction.scene_prompt}
 
 
 class ActionPlan(BaseModel):
@@ -155,6 +161,8 @@ def _normalize_plan(plan: ActionPlan, request: RouteRequest) -> ActionPlan:
     strong_action = _strong_rule_action(request)
     if strong_action is not None:
         values["action"] = strong_action
+    if values["action"] in MANUAL_ONLY_ACTIONS:
+        values["action"] = WebAction.edit if request.has_image else WebAction.compile
 
     if values["action"] == WebAction.tag_image:
         if not request.has_image:
