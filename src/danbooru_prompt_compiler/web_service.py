@@ -46,6 +46,9 @@ from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedP
 DEFAULT_ROUTER_MODEL = "qwen3:1.7b"
 DEFAULT_COMPILER_MODEL = "qwen3:1.7b"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
+# Prose is harder than tag lists, so this is the one step worth pointing at a
+# larger local model without slowing tag generation down.
+DEFAULT_SCENE_MODEL = DEFAULT_COMPILER_MODEL
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 IMAGE_DESCRIPTION_PROMPT = (
     "/no_think\n"
@@ -91,6 +94,7 @@ class WebRunRequest(BaseModel):
     generate_next_panel: bool = True
     next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE
     scene_template: str = DEFAULT_SCENE_TEMPLATE
+    scene_model: str = DEFAULT_SCENE_MODEL
     edited_tags: str = ""
     edited_description: str = ""
     action_override: str = "auto"
@@ -230,6 +234,7 @@ class WebPromptService:
         variants: int = 4,
         next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE,
         scene_template: str = "",
+        scene_model: str = "",
         edited_tags: str = "",
         edited_description: str = "",
         action_override: str = "auto",
@@ -313,7 +318,7 @@ class WebPromptService:
                 excluded_image_tags=excluded_image_tags,
                 variants=variants,
                 ollama_url=ollama_url,
-                compiler_model=compiler_model,
+                scene_model=scene_model or compiler_model,
             )
             result = WebRunResult(
                 action_plan=_plan_dict(routed),
@@ -439,7 +444,7 @@ class WebPromptService:
         excluded_image_tags: list[str],
         variants: int,
         ollama_url: str,
-        compiler_model: str,
+        scene_model: str,
     ) -> list[str]:
         if not image_tags and not image_description and not instruction and not base_prompt:
             raise ValueError(
@@ -460,7 +465,7 @@ class WebPromptService:
             base_prompt=base_prompt,
             avoid_terms=avoid_terms,
         )
-        client = self.text_factory(ollama_url, compiler_model)
+        client = self.text_factory(ollama_url, scene_model)
         response = client.generate(
             LLMRequest(
                 prompt=request,

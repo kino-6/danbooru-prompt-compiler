@@ -98,6 +98,8 @@ Pick the skeleton with `自然文プロンプトのテンプレート`:
 | シーンイラスト | Subject, Setting, Lighting, Materials, Layout, Details, Mood |
 | ポスター／キービジュアル | Subject, Setting, Lighting, Palette, Layout, Details |
 
+Everything here runs on the same local Ollama instance as the tag pipeline; nothing is sent anywhere. Writing English prose is harder than assembling a tag list, so `自然文プロンプト用モデル` in the advanced settings points this one step at a larger local model - `qwen3:8b`, `gemma3:12b`, or whatever is pulled - while routing and tag generation stay on the small fast model. Leave it empty to reuse the prompt-generation model. The Ollama connection check includes it, so a model that still needs an `ollama pull` is reported before a run fails.
+
 Templates are plain YAML in `templates/`; drop a file in with `label`, `task`, `sections`, `delivery`, and an optional `order`, and it appears in the dropdown on the next launch. The model only fills the sections in - the shape is rebuilt locally afterwards, so a dropped or reordered section never corrupts the output.
 
 The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only from the button or the `操作種別` selector.
