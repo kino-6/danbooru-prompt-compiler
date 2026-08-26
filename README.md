@@ -85,6 +85,23 @@ The workbench keeps the WD ONNX runtime and recent image-tag results cached, so 
 
 With the VLM enabled, every run on an image fills the `画像の説明（VLM）` box under the image with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
 
+### Natural-language prompts
+
+Newer image models take prose rather than Danbooru tags. The `自然文プロンプト` button generates it from the same material the tag pipeline already has - the inferred image tags, the VLM description, and your instruction - laid out as an atomic schema: one task line, the template's named sections, a delivery line, and an explicit avoid line.
+
+Pick the skeleton with `自然文プロンプトのテンプレート`:
+
+| Template | Sections |
+| --- | --- |
+| キャラクター設定シート | Subject, Clothing, Pose, Expression, Lighting, Layout, Details |
+| 絵コンテ／次のコマ | Subject, Action, Expression, Lighting, Layout, Details |
+| シーンイラスト | Subject, Setting, Lighting, Materials, Layout, Details, Mood |
+| ポスター／キービジュアル | Subject, Setting, Lighting, Palette, Layout, Details |
+
+Templates are plain YAML in `templates/`; drop a file in with `label`, `task`, `sections`, `delivery`, and an optional `order`, and it appears in the dropdown on the next launch. The model only fills the sections in - the shape is rebuilt locally afterwards, so a dropped or reordered section never corrupts the output.
+
+The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only from the button or the `操作種別` selector.
+
 Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.
 
 Tags that reliably lower image quality are dropped from both the inferred image tags and the generated prompts. `*` matches any characters, and the defaults cover three groups:
@@ -282,6 +299,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `seed_tags.py`: seed tag inference for Danbooru post lookup.
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
+- `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.
 

@@ -152,6 +152,31 @@ def test_next_panel_proposals_fill_the_boxes_after_the_current_prompt(tmp_path) 
             browser.close()
 
 
+def test_scene_prompt_button_runs_with_the_selected_template(tmp_path) -> None:
+    image = tmp_path / "scene.png"
+    Image.new("RGB", (4, 4), "navy").save(image)
+
+    with running_test_webui(candidates=["Subject: a young woman"]) as (url, service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
+            expect(page.locator('#image-workspace img[src*="scene.png"]')).to_be_visible()
+
+            # Both the template picker and the trigger sit in the main controls.
+            page.locator("#scene-template input").click()
+            page.locator("#scene-template li", has_text="絵コンテ／次のコマ").first.click()
+            page.get_by_role("button", name="自然文プロンプト", exact=True).click()
+
+            expect(page.locator("#prompt-output-1 textarea")).to_have_value(
+                "Subject: a young woman"
+            )
+            assert service.run_options[-1]["action_override"] == "scene_prompt"
+            assert service.run_options[-1]["scene_template"] == "storyboard_panel"
+            browser.close()
+
+
 def test_next_panel_button_runs_from_an_image_alone(tmp_path) -> None:
     image = tmp_path / "panel.png"
     Image.new("RGB", (4, 4), "orange").save(image)

@@ -158,6 +158,37 @@ def test_next_panel_follow_up_is_skipped_for_an_explicit_next_panel_run() -> Non
     assert outputs.prompts == ["panel_a", "panel_b", "panel_c", "panel_d"]
 
 
+def test_next_panel_follow_up_is_skipped_for_a_prose_prompt() -> None:
+    class SceneService(RecordingService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
+            self.calls += 1
+            # Reports a tag action, so only the explicit request override can
+            # keep tag panels out of boxes 2-4.
+            return WebRunResult(
+                action_plan={"action": "tag_image"},
+                inferred_tags="1girl, rain",
+                output="prose",
+                status="ok",
+                candidates=["Subject: a young woman"],
+            )
+
+    service = SceneService()
+
+    outputs = run_workbench(
+        service,
+        WebRunRequest(instruction="", action_override="scene_prompt"),
+        [],
+    )
+
+    # Tag prompts in boxes 2-4 would sit in a different format from box 1.
+    assert service.calls == 1
+    assert outputs.prompts == ["Subject: a young woman", "", "", ""]
+
+
 def test_next_panel_follow_up_can_be_switched_off() -> None:
     service = TwoRunService()
 
@@ -257,7 +288,14 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     action_values = {
         value for _label, value in components["操作種別"]["props"]["choices"]
     }
-    assert action_values == {"auto", "tag_image", "compile", "edit", "next_panel"}
+    assert action_values == {
+        "auto",
+        "tag_image",
+        "compile",
+        "edit",
+        "next_panel",
+        "scene_prompt",
+    }
     assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert components["画像"]["props"]["interactive"] is True
@@ -399,9 +437,43 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     assert input_labels[WEB_RUN_FIELDS.index("edited_description")] == "画像の説明（VLM）"
     assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "次のコマの変化量"
     assert (
+        input_labels[WEB_RUN_FIELDS.index("scene_template")]
+        == "自然文プロンプトのテンプレート"
+    )
+    assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"
     )
+
+
+def test_scene_prompt_trigger_and_template_choices_are_exposed() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    scene_dependency = next(
+        dependency
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") == "run_scene_prompt"
+    )
+    run_dependency = next(
+        dependency
+        for dependency in app.config["dependencies"]
+        if dependency.get("api_name") == "run_prompt_workbench"
+    )
+    template_props = components["自然文プロンプトのテンプレート"]["props"]
+    template_names = [value for _label, value in template_props["choices"]]
+
+    assert "character_sheet" in template_names
+    assert "storyboard_panel" in template_names
+    assert template_props["value"] in template_names
+    assert _folded_ancestor_labels(app, "scene-template") == []
+    # The same inputs and outputs as 実行; only the action differs.
+    assert scene_dependency["inputs"] == run_dependency["inputs"]
+    assert scene_dependency["outputs"] == run_dependency["outputs"]
+    assert "自然文プロンプト" in {
+        component["props"].get("value")
+        for component in app.config["components"]
+        if component.get("type") == "button"
+    }
 
 
 def test_pasted_clipboard_image_is_routed_into_the_image_workspace() -> None:
@@ -461,11 +533,12 @@ def test_webui_has_cancel_dependencies_for_every_run_trigger() -> None:
     run_ids = {
         dependency["id"]
         for dependency in app.config["dependencies"]
-        if dependency.get("api_name") in {"run_prompt_workbench", "run_next_panel"}
+        if dependency.get("api_name")
+        in {"run_prompt_workbench", "run_next_panel", "run_scene_prompt"}
         or (dependency.get("targets") and dependency.get("trigger") == "submit")
     }
-    # 実行, 次のコマ, and instruction submit.
-    assert len(cancelled_ids) == 3
+    # 実行, 次のコマ, 自然文プロンプト, and instruction submit.
+    assert len(cancelled_ids) == 4
     assert run_ids <= cancelled_ids
 
 

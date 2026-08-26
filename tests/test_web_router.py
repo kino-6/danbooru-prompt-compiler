@@ -130,3 +130,21 @@ def test_ui_output_count_overrides_small_model_variant_count() -> None:
     )
 
     assert routed.plan.variants == 4
+
+
+def test_router_never_selects_the_manual_only_scene_prompt() -> None:
+    client = FakeLLMClient('{"action":"scene_prompt","reason":"prose"}')
+    router = NaturalLanguageRouter(client)
+
+    with_image = router.route(
+        RouteRequest(instruction="ポスターっぽくして", has_image=True)
+    )
+    without_image = router.route(
+        RouteRequest(instruction="ポスターっぽくして", has_image=False)
+    )
+
+    # A prose prompt is a different output format, not a reading of the
+    # instruction, so it stays reachable only from the UI.
+    assert with_image.source == "llm"
+    assert with_image.plan.action is WebAction.edit
+    assert without_image.plan.action is WebAction.compile

@@ -1,0 +1,12 @@
+label: キャラクター設定シート
+order: 10
+task: Produce a character design sheet for a single character.
+sections:
+  Subject: identity, apparent age, hair colour and style, eye colour, build
+  Clothing: outfit, layers, accessories, footwear, fabric and materials
+  Pose: stance and gesture of the main view
+  Expression: facial expression and direction of gaze
+  Lighting: key light direction, softness, colour temperature
+  Layout: framing, camera distance, placement of the figure in frame
+  Details: signature props and small identifying marks
+delivery: One full-body main view on a plain neutral background, consistent line weight and colour treatment.

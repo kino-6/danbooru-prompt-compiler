@@ -381,3 +381,30 @@ onto the variant, and the compiler ran at temperature `0.0`.
 - [x] Unit test proves a large change stops pinning clothing tags onto the panel.
 - [x] Chromium E2E proves both controls are reachable without opening a section.
 - [x] The full test suite and CI pass (131 passed, 1 browser-only skip; 7 Chromium E2E passed).
+
+## Task 26 — Add a natural-language prompt frame
+
+Newer image models take prose, not Danbooru tags, and the reliable way to write that
+prose is the atomic schema used by prompt libraries such as `awesome-gpt-image-2`: one
+task line, named sections, a delivery line, and an explicit avoid line.
+
+- [x] Add a `scene_prompt` action that fills a template from the image tags, the VLM
+      description, and the instruction.
+- [x] Ship four templates as YAML in `templates/`, so a new category is a new file.
+- [x] Rebuild the template shape locally instead of trusting the model's formatting.
+- [x] Build the avoid line from the literal exclusion words plus the tags this image lost.
+- [x] Keep the action reachable only from the UI, never from the router.
+- [x] Never follow a prose prompt with tag panels in boxes 2-4.
+
+### Gate
+
+- [x] Unit tests prove templates load in order, bad files are skipped, and a missing
+      selection falls back to the first template.
+- [x] Unit test proves a sloppy answer - fenced, reordered, with extra lines - is rebuilt
+      into the template's shape.
+- [x] Unit test proves the request carries the tags, the description, and the avoid list,
+      and that the tag compiler never runs.
+- [x] Unit test proves the router rewrites a model-proposed `scene_prompt` to a tag action.
+- [x] Unit test proves an explicit prose request suppresses the next-panel follow-up.
+- [x] Chromium E2E proves picking a template and pressing the button runs with it.
+- [x] The full test suite and CI pass (143 passed, 1 browser-only skip; 8 Chromium E2E passed).
