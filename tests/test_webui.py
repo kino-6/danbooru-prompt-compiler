@@ -440,10 +440,35 @@ def test_run_inputs_follow_the_request_model_order() -> None:
         input_labels[WEB_RUN_FIELDS.index("scene_template")]
         == "自然文プロンプトのテンプレート"
     )
+    assert input_labels[WEB_RUN_FIELDS.index("scene_model")] == "自然文プロンプト用モデル"
     assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"
     )
+
+
+def test_diagnostics_cover_the_prose_model() -> None:
+    checked: list[list[str]] = []
+
+    class Diagnostic:
+        message = "ok"
+
+    with mock.patch.object(
+        webui,
+        "check_ollama",
+        lambda _url, required: checked.append(required) or Diagnostic(),
+    ):
+        webui.diagnose_ollama(
+            "http://localhost:11434",
+            "qwen3:1.7b",
+            "qwen3:1.7b",
+            "qwen3-vl:8b",
+            "gemma3:12b",
+            False,
+        )
+
+    # A larger prose model is the one most likely still to need an ollama pull.
+    assert checked == [["qwen3:1.7b", "qwen3:1.7b", "gemma3:12b"]]
 
 
 def test_scene_prompt_trigger_and_template_choices_are_exposed() -> None:

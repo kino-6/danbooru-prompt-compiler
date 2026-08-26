@@ -19,8 +19,9 @@ from .web_service import (
     DEFAULT_COMPILER_MODEL,
     DEFAULT_NEXT_PANEL_CHANGE,
     DEFAULT_OLLAMA_URL,
-    DEFAULT_SCENE_TEMPLATE,
     DEFAULT_ROUTER_MODEL,
+    DEFAULT_SCENE_MODEL,
+    DEFAULT_SCENE_TEMPLATE,
     DEFAULT_VISION_MODEL,
     WEB_RUN_FIELDS,
     ProgressCallback,
@@ -189,9 +190,11 @@ def diagnose_ollama(
     router_model: str,
     compiler_model: str,
     vision_model: str,
+    scene_model: str,
     use_vision: bool,
 ) -> str:
-    required = [router_model, compiler_model]
+    # A larger prose model is the one most likely not to be pulled yet.
+    required = [router_model, compiler_model, scene_model]
     if use_vision:
         required.append(vision_model)
     return check_ollama(ollama_url, required).message
@@ -273,6 +276,7 @@ def run_workbench(
                 [
                     request.router_model,
                     request.compiler_model,
+                    request.scene_model,
                     request.vision_model if request.use_vision else "",
                 ],
             ),
@@ -486,6 +490,7 @@ def build_app(*, service: WebPromptService | None = None):
                 settings.router_model,
                 settings.compiler_model,
                 settings.vision_model,
+                settings.scene_model,
                 image.use_vision,
             ],
             outputs=settings.diagnostic_output,
@@ -564,6 +569,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "generate_next_panel": controls.generate_next_panel,
         "next_panel_change": controls.next_panel_change,
         "scene_template": controls.scene_template,
+        "scene_model": settings.scene_model,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": settings.action_override,
@@ -760,6 +766,15 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 value=DEFAULT_VISION_MODEL,
                 label="VLMモデル",
             )
+            scene_model = gr.Textbox(
+                value=DEFAULT_SCENE_MODEL,
+                label="自然文プロンプト用モデル",
+                elem_id="scene-model-input",
+                info=(
+                    "英文の作文はタグ生成より重い処理です。"
+                    "ここだけ大きめのローカルモデルにできます。空欄ならプロンプト生成モデルを使います。"
+                ),
+            )
             allow_private_image_urls = gr.Checkbox(
                 value=False,
                 label="プライベート画像URLを許可",
@@ -816,6 +831,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         compiler_model=compiler_model,
         ollama_url=ollama_url,
         vision_model=vision_model,
+        scene_model=scene_model,
         allow_private_image_urls=allow_private_image_urls,
         action_override=action_override,
         diagnostic_button=diagnostic_button,

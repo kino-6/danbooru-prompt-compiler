@@ -408,3 +408,20 @@ task line, named sections, a delivery line, and an explicit avoid line.
 - [x] Unit test proves an explicit prose request suppresses the next-panel follow-up.
 - [x] Chromium E2E proves picking a template and pressing the button runs with it.
 - [x] The full test suite and CI pass (143 passed, 1 browser-only skip; 8 Chromium E2E passed).
+
+## Task 27 — Give the prose step its own local model
+
+Natural-language prompts shared `compiler_model` with tag generation, so pointing them at
+a model large enough to write English meant slowing routing and tag output down too.
+
+- [x] Add a `自然文プロンプト用モデル` setting used only by the prose step.
+- [x] Fall back to the prompt-generation model when it is left empty.
+- [x] Include it in the Ollama connection check and in the failure message.
+
+### Gate
+
+- [x] Unit test proves the prose step uses the dedicated model, and the compiler model
+      when the setting is empty.
+- [x] Unit test proves the connection check asks about the prose model.
+- [x] Unit test proves the setting appears in the run inputs in request-model order.
+- [x] The full test suite and CI pass (145 passed, 1 browser-only skip; 8 Chromium E2E passed).

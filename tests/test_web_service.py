@@ -269,6 +269,34 @@ class EmptyTagger:
         return ImageTagResult(tags=[], rating=None)
 
 
+def test_scene_prompt_uses_its_own_model_and_falls_back_to_the_compiler_model() -> None:
+    plan = ActionPlan(action=WebAction.scene_prompt)
+    used_models: list[str] = []
+
+    def text_factory(_url: str, model: str) -> RecordingTextClient:
+        used_models.append(model)
+        return RecordingTextClient(["Subject: a young woman"])
+
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        text_factory=text_factory,
+        scene_templates=SCENE_TEMPLATES,
+    )
+    options = dict(
+        image_path="sample.png",
+        instruction="ポスターにして",
+        base_prompt="",
+        general_threshold=0.4,
+    )
+
+    service.run(compiler_model="qwen3:1.7b", scene_model="gemma3:12b", **options)
+    # An empty setting keeps the previous behaviour instead of failing.
+    service.run(compiler_model="qwen3:1.7b", scene_model="", **options)
+
+    assert used_models == ["gemma3:12b", "qwen3:1.7b"]
+
+
 def test_scene_prompt_needs_something_to_describe() -> None:
     # An image the tagger found nothing in, with no instruction and no VLM,
     # gets past the generic guard but leaves the prose model with nothing.
