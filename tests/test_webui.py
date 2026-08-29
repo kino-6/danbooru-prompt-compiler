@@ -630,3 +630,41 @@ def test_prompt_candidates_get_independent_copyable_boxes() -> None:
         assert props["interactive"] is True
         assert props["visible"] is True
         assert props["elem_id"] == f"prompt-output-{index}"
+
+
+def test_diagnostics_cover_the_selected_vision_model() -> None:
+    checked: list[list[str]] = []
+
+    class Diagnostic:
+        message = "ok"
+
+    with mock.patch.object(
+        webui,
+        "check_ollama",
+        lambda _url, required: checked.append(required) or Diagnostic(),
+    ):
+        webui.diagnose_ollama(
+            "http://localhost:11434",
+            "qwen3:1.7b",
+            "qwen3:1.7b",
+            "unseen-gemma4:26b",
+            "gemma3:12b",
+            True,
+        )
+
+    # Whatever the dropdown ended up holding is what the run will ask for, so it
+    # is what the check has to report on.
+    assert checked == [["qwen3:1.7b", "qwen3:1.7b", "gemma3:12b", "unseen-gemma4:26b"]]
+
+
+def test_vision_model_offers_the_known_entries_and_still_takes_a_typed_name() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    vision = components["VLMモデル"]
+
+    assert vision["props"]["allow_custom_value"] is True
+    offered = [value for _label, value in vision["props"]["choices"]]
+    assert offered == ["qwen3-vl:8b", "unseen-gemma4:26b"]
+    labels = [label for label, _value in vision["props"]["choices"]]
+    assert any("無検閲" in label for label in labels)
+    assert any("既定" in label for label in labels)

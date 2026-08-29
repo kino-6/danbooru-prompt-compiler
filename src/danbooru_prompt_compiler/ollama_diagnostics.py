@@ -5,12 +5,21 @@ from dataclasses import dataclass
 import httpx
 
 
+# One run may touch the router, the tag compiler, the vision model, and the
+# prose model. Ollama keeps a model resident only while it fits, so once the
+# selection outgrows the card it evicts and reloads mid-run - about a minute and
+# a half for a 26B vision model. The budget is the common 16 GB card; it is a
+# reporting threshold, not a limit anything enforces.
+RESIDENT_BUDGET_BYTES = 16 * 1024**3
+
+
 @dataclass(frozen=True)
 class OllamaDiagnostic:
     reachable: bool
     installed_models: list[str]
     missing_models: list[str]
     message: str
+    resident_bytes: int = 0
 
 
 def check_ollama(
@@ -32,8 +41,14 @@ def check_ollama(
                 if model.get("name") or model.get("model")
             }
         )
+        sizes = {
+            str(model.get("name") or model.get("model")): int(model.get("size") or 0)
+            for model in payload.get("models", [])
+            if model.get("name") or model.get("model")
+        }
         required = list(dict.fromkeys(model for model in required_models if model))
         missing = [model for model in required if model not in installed]
+        resident_bytes = sum(sizes.get(model, 0) for model in required)
         if missing:
             commands = "\n".join(f"ollama pull {model}" for model in missing)
             message = (
@@ -42,11 +57,15 @@ def check_ollama(
             )
         else:
             message = f"Ollama接続OK。必要なモデル {len(required)} 件を確認しました。"
+        crowding = _residency_warning(required, sizes, resident_bytes)
+        if crowding:
+            message = f"{message}\n\n{crowding}"
         return OllamaDiagnostic(
             reachable=True,
             installed_models=installed,
             missing_models=missing,
             message=message,
+            resident_bytes=resident_bytes,
         )
     except (httpx.ConnectError, httpx.TimeoutException) as exc:
         return OllamaDiagnostic(
@@ -68,6 +87,30 @@ def check_ollama(
     finally:
         if owns_client:
             http_client.close()
+
+
+def _residency_warning(
+    required: list[str],
+    sizes: dict[str, int],
+    resident_bytes: int,
+) -> str:
+    """Say so when the chosen models cannot all stay loaded at once."""
+    if len(required) < 2 or resident_bytes <= RESIDENT_BUDGET_BYTES:
+        return ""
+    heaviest = max(required, key=lambda model: sizes.get(model, 0))
+    # Naming the heaviest alone is the honest reading: a 1.3GB router is not
+    # what broke the budget, it is what gets evicted when the big one loads.
+    return (
+        f"選択中のモデルは合計 {_gigabytes(resident_bytes)} で、"
+        f"VRAM の目安 {_gigabytes(RESIDENT_BUDGET_BYTES)} を超えています。"
+        f"最大の `{heaviest}`（{_gigabytes(sizes.get(heaviest, 0))}）と"
+        f"残り {len(required) - 1} 件は同時に常駐できないため、"
+        "実行のたびに入れ替えの読み込み時間がかかります。"
+    )
+
+
+def _gigabytes(size: int) -> str:
+    return f"{size / 1024**3:.1f}GB"
 
 
 def format_ollama_error(exc: Exception, configured_models: list[str]) -> str:

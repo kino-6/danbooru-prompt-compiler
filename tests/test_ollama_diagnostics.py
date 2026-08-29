@@ -122,3 +122,60 @@ def test_restart_explains_a_missing_model() -> None:
 
 def test_restart_rejects_an_empty_model_name() -> None:
     assert "モデル名が空です" in restart_ollama_model("http://localhost:11434", "  ")
+
+
+def test_diagnostic_warns_when_the_selection_cannot_stay_resident() -> None:
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"name": "qwen3:1.7b", "size": 1_400_000_000},
+                    {"name": "unseen-gemma4:26b", "size": 18_000_000_000},
+                    {"name": "qwen3-vl:8b", "size": 6_100_000_000},
+                ]
+            },
+            request=request,
+        )
+
+    with _client(handler) as client:
+        result = check_ollama(
+            "http://ollama.test",
+            ["qwen3:1.7b", "unseen-gemma4:26b", "qwen3-vl:8b"],
+            client=client,
+        )
+
+    assert result.reachable
+    assert result.missing_models == []
+    assert "接続OK" in result.message
+    # Only the heaviest is named. A 1.3GB router did not break the budget, and
+    # naming it as the culprit would send the reader after the wrong setting.
+    assert "同時に常駐できない" in result.message
+    assert "`unseen-gemma4:26b`" in result.message
+    assert "残り 2 件" in result.message
+    assert "`qwen3:1.7b`" not in result.message
+    assert "`qwen3-vl:8b`" not in result.message
+
+
+def test_a_selection_that_fits_is_reported_without_a_warning() -> None:
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"name": "qwen3:1.7b", "size": 1_400_000_000},
+                    {"name": "qwen3-vl:8b", "size": 6_100_000_000},
+                ]
+            },
+            request=request,
+        )
+
+    with _client(handler) as client:
+        result = check_ollama(
+            "http://ollama.test",
+            ["qwen3:1.7b", "qwen3-vl:8b"],
+            client=client,
+        )
+
+    assert "常駐" not in result.message
+    assert result.resident_bytes == 7_500_000_000

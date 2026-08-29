@@ -826,3 +826,31 @@ def test_the_prose_model_sees_the_image_only_when_the_setting_is_on() -> None:
     service.run(scene_sees_image=False, **options)
     assert text_client.last_request.image_paths == []
     assert "The reference image is attached." not in text_client.last_request.prompt
+
+
+def test_a_typed_in_vision_model_still_reaches_the_vision_factory() -> None:
+    plan = ActionPlan(action=WebAction.tag_image)
+    asked: list[str] = []
+
+    def vision_factory(_url: str, model: str) -> RecordingTextClient:
+        asked.append(model)
+        return RecordingTextClient(["立っている少女"])
+
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        vision_factory=vision_factory,
+    )
+
+    # The dropdown offers two entries and accepts anything else typed into it,
+    # so a name it has never heard of has to survive the trip unchanged.
+    service.run(
+        image_path="sample.png",
+        instruction="タグを推測して",
+        base_prompt="",
+        general_threshold=0.4,
+        use_vision=True,
+        vision_model="some-other-vlm:4b",
+    )
+
+    assert asked == ["some-other-vlm:4b"]

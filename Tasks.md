@@ -34,15 +34,15 @@ and kept the richer prose, so the tags stay in as factual anchors rather than be
 `qwen3-vl:8b` refuses or sanitizes exactly the material this tool exists for, and the
 alternative is a 40-character Hugging Face tag nobody will type correctly twice.
 
-- [ ] Offer the known vision models as a dropdown that still accepts a free-form entry.
-- [ ] Say which entry is uncensored and which is the light default, with their sizes.
-- [ ] Warn when the selected vision model and the prose model cannot be resident together.
+- [x] Offer the known vision models as a dropdown that still accepts a free-form entry.
+- [x] Say which entry is uncensored and which is the light default, with their sizes.
+- [x] Warn when the selected vision model and the prose model cannot be resident together.
 
 ### Gate
 
-- [ ] Unit test proves a free-form model name still reaches the vision factory.
-- [ ] Unit test proves the connection check covers the selected entry.
-- [ ] The full test suite and CI pass.
+- [x] Unit test proves a free-form model name still reaches the vision factory.
+- [x] Unit test proves the connection check covers the selected entry.
+- [x] The full test suite and CI pass (155 passed, 1 browser-only skip; 8 Chromium E2E passed).
 
 ## Task 30 — Check the inferred tags against the image
 

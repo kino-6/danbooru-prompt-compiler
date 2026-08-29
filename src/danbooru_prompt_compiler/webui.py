@@ -23,6 +23,7 @@ from .web_service import (
     DEFAULT_SCENE_MODEL,
     DEFAULT_SCENE_TEMPLATE,
     DEFAULT_VISION_MODEL,
+    VISION_MODEL_CHOICES,
     WEB_RUN_FIELDS,
     ProgressCallback,
     WebPromptService,
@@ -763,9 +764,15 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 value=DEFAULT_OLLAMA_URL,
                 label="Ollama URL",
             )
-            vision_model = gr.Textbox(
+            vision_model = gr.Dropdown(
+                choices=list(VISION_MODEL_CHOICES),
                 value=DEFAULT_VISION_MODEL,
+                allow_custom_value=True,
                 label="VLMモデル",
+                info=(
+                    "一覧にないモデルは直接入力できます。"
+                    "既定のモデルが説明を拒否・省略する画像では無検閲のものを選んでください。"
+                ),
             )
             scene_model = gr.Textbox(
                 value=DEFAULT_SCENE_MODEL,

@@ -46,6 +46,13 @@ from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedP
 DEFAULT_ROUTER_MODEL = "qwen3:1.7b"
 DEFAULT_COMPILER_MODEL = "qwen3:1.7b"
 DEFAULT_VISION_MODEL = "qwen3-vl:8b"
+# The choice between these is a trade of size against what the model will agree
+# to describe, so the labels carry both. Any other pulled model still works: the
+# dropdown accepts a typed-in name.
+VISION_MODEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("qwen3-vl:8b — 軽量・既定（6.1GB）", "qwen3-vl:8b"),
+    ("unseen-gemma4:26b — 無検閲・アニメ向け（17GB）", "unseen-gemma4:26b"),
+)
 # Prose is harder than tag lists, so this is the one step worth pointing at a
 # larger local model without slowing tag generation down.
 DEFAULT_SCENE_MODEL = DEFAULT_COMPILER_MODEL
