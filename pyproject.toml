@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "danbooru-prompt-compiler"
 version = "0.1.0"
-description = "Local-first CLI and Web workbench for converting natural language scene descriptions and images into Danbooru-style prompts"
+description = "Local-first CLI for converting natural language scene descriptions into Danbooru-style prompts"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }

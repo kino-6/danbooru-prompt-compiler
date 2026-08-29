@@ -1,34 +1,23 @@
 # danbooru-prompt-compiler
 
-Local-first tool that turns a natural-language image idea, or an image itself, into organized Danbooru-style positive prompts. It runs as a CLI and as a local Web workbench.
+Local-first CLI that turns natural-language image ideas into organized Danbooru-style positive prompts.
 
-It is built for iterative anime image generation workflows: write a rough idea, edit an existing prompt in Japanese, then pull a few "prompt gacha" suggestions and copy the one that looks promising. Every model it uses - the language models, the image tagger, and the vision model - runs on the machine in front of you.
+It is built for iterative anime image generation workflows: write a rough idea, edit an existing prompt in Japanese, then pull a few "prompt gacha" suggestions and copy the one that looks promising.
 
 ## Highlights
 
-Prompts from text:
-
-- Local-first LLM integration using an Ollama-compatible API.
-- Two core modes: create a prompt from natural language, or preserve a base prompt and apply a natural-language edit.
+- Local-first LLM integration using Ollama-compatible API.
+- Two core modes:
+  - create a prompt from natural language
+  - preserve a base prompt and apply a natural-language edit
 - Prompt gacha with `--suggest N`: proposes edit ideas and shows converted prompt previews.
 - Danbooru post-based reference tags for stronger short-input prompting.
-- Grouped output with copy-ready `===` blocks plus `subject`, `appearance`, `pose`, `scene`, and other sections, and clipboard copy with `--copy` on Windows.
-- Tag dictionary warnings for invented tags, an automatic download when `data/tags.json` is missing, and exclusion words that drop quality-degrading tags on both the CLI and the Web UI.
-
-Prompts from an image:
-
-- Danbooru tag inference with WD Tagger, running locally through ONNX Runtime without Ollama.
-- A vision model describes the image in Japanese; that description also feeds image edits and next-panel requests, and stays editable.
-- `タグをVLMで確認` has the vision model judge the inferred tags against the picture, bounded by the tag dictionary so it can never invent one.
-- Natural-language prose prompts for newer image models, optionally written from the image itself with the inferred tags as factual anchors.
-- An uncensored vision model option for material the default one will not describe. See [Running the vision steps](#running-the-vision-steps).
-
-Web workbench (prototype):
-
-- Drop, paste, or link an image, then type a Japanese instruction; a small router picks the action, with deterministic keyword rules as a fallback.
-- Next-panel generation with a change-amount slider deciding how far a panel may drift.
-- Four prompt boxes with per-session history, editable tags, and a manual action override.
-- An Ollama connection check that reports missing models with exact `ollama pull` commands and warns when the chosen models will not all stay resident in VRAM.
+- Grouped output with copy-ready `===` blocks plus `subject`, `appearance`, `pose`, `scene`, and other sections.
+- Clipboard copy with `--copy` on Windows.
+- Danbooru tag dictionary warnings for unknown tags.
+- Automatic Danbooru tag dictionary download when `data/tags.json` is missing.
+- Local image tagging with WD Tagger, plus a vision model that describes the image and reviews the inferred tags against it.
+- A local Web workbench for image-led work: prose prompts, next panels, and an uncensored vision model option.
 
 ## Setup
 
