@@ -18,6 +18,7 @@ from .tag_filter import (
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
     DEFAULT_NEXT_PANEL_CHANGE,
+    DEFAULT_NEXT_PANEL_TIME,
     DEFAULT_OLLAMA_URL,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_SCENE_MODEL,
@@ -481,7 +482,7 @@ def build_app(*, service: WebPromptService | None = None):
             "instruction": [controls.instruction],
             "base_prompt": [controls.base_prompt_box],
             "follow_up": [controls.generate_next_panel],
-            "panel_change": [controls.next_panel_change],
+            "panel_change": [controls.next_panel_box],
             "variants": [controls.variants_box],
             "scene_template": [controls.scene_template],
             "scene_settings": [settings.scene_settings_box],
@@ -705,6 +706,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "variants": controls.variants,
         "generate_next_panel": controls.generate_next_panel,
         "next_panel_change": controls.next_panel_change,
+        "next_panel_time": controls.next_panel_time,
         "scene_template": controls.scene_template,
         "scene_model": settings.scene_model,
         "scene_sees_image": settings.scene_sees_image,
@@ -822,14 +824,24 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             value=True,
             label="次のコマも生成する（出力2〜4）",
         )
-        next_panel_change = gr.Slider(
-            0.0,
-            1.0,
-            value=DEFAULT_NEXT_PANEL_CHANGE,
-            step=0.1,
-            label="次のコマの変化量",
-            elem_id="next-panel-change",
-        )
+        # Two axes of the same question, so they sit on one line and toggle as one.
+        with gr.Row() as next_panel_box:
+            next_panel_time = gr.Slider(
+                0.0,
+                1.0,
+                value=DEFAULT_NEXT_PANEL_TIME,
+                step=0.1,
+                label="経過する時間",
+                elem_id="next-panel-time",
+            )
+            next_panel_change = gr.Slider(
+                0.0,
+                1.0,
+                value=DEFAULT_NEXT_PANEL_CHANGE,
+                step=0.1,
+                label="変わってよい範囲",
+                elem_id="next-panel-change",
+            )
         scene_template = gr.Dropdown(
             choices=[(template.label, template.name) for template in load_templates()],
             value=DEFAULT_SCENE_TEMPLATE,
@@ -869,6 +881,8 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         variants_box=variants_box,
         generate_next_panel=generate_next_panel,
         next_panel_change=next_panel_change,
+        next_panel_time=next_panel_time,
+        next_panel_box=next_panel_box,
         scene_template=scene_template,
         scene_prompt_button=scene_prompt_button,
         run_button=run_button,

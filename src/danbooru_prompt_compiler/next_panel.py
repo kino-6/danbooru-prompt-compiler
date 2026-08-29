@@ -20,6 +20,11 @@ import re
 from .formatter import group_tags
 
 NEXT_PATTERN = re.compile(r"^\s*[-*]?\s*\**next\**\s*[:：]\s*(.+?)\s*$", re.IGNORECASE)
+LABELLED_PATTERN = re.compile(
+    r"^\s*[-*]?\s*\**(next|remove|add)\**\s*[:：]", re.IGNORECASE
+)
+# A line that is a tag list rather than a sentence: no sentence punctuation.
+TAG_LINE_PATTERN = re.compile(r"^[A-Za-z0-9_()\-, ]+$")
 
 # The change slider names aspects; the formatter names categories. This is the
 # one place the two vocabularies meet.
@@ -50,6 +55,7 @@ def build_next_panel_request(
     *,
     description: str,
     movement: str,
+    latitude: str,
     protected: list[str],
 ) -> str:
     """Ask what changes in the next instant, in names rather than prose."""
@@ -59,7 +65,8 @@ def build_next_panel_request(
         "",
         f"Tags of the current panel: {', '.join(tags)}",
         _labelled("Description of the current panel", description),
-        f"How far it may move: {movement}",
+        f"How much time passes: {movement}",
+        f"What may be different: {latitude}",
         _labelled(
             "These stay true and must not be removed", ", ".join(protected)
         ),
@@ -79,6 +86,22 @@ def build_next_panel_request(
         "passage of time itself.",
     ]
     return "\n".join(part for part in parts if part is not None)
+
+
+def normalize_panel_answer(raw_output: str) -> str:
+    """Put the labels back when the model answered in the right shape without them.
+
+    Asked for three labelled lines it sometimes returns three bare ones - the
+    sentence, the removals, the additions - and the content is exactly right.
+    Discarding that over a missing prefix threw away the best answers measured,
+    so an unlabelled answer in the expected shape is relabelled instead.
+    """
+    lines = [line.strip() for line in (raw_output or "").splitlines() if line.strip()]
+    if len(lines) != 3 or any(LABELLED_PATTERN.match(line) for line in lines):
+        return raw_output
+    if not all(TAG_LINE_PATTERN.match(line) for line in lines[1:]):
+        return raw_output
+    return f"Next: {lines[0]}\nRemove: {lines[1]}\nAdd: {lines[2]}"
 
 
 def described_moment(raw_output: str) -> str:

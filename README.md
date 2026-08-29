@@ -137,23 +137,29 @@ Everything it proposes is bounded the same way the tag review is: additions must
 
 A proposal whose pose and framing match the panel it came from is not a next panel. The status line says how many came back unmoved rather than handing them over quietly. If the vision model is missing or fails, the run falls back to the old tag-only path with the reason in the status line.
 
-On the sample portrait - an archer with an arrow nocked - the change slider now moves the panel rather than trimming it:
+The model sometimes answers in the right shape without the labels - the sentence, the removals and the additions as three bare lines - and the content is exactly right when it does. Those are relabelled rather than discarded: measured, discarding them threw away the best proposals of the set, including the only one that reached `aiming, drawing_bow` at that setting.
 
-| 変化量 | Proposed moment | Tags added |
-| --- | --- | --- |
-| `0.2` | pulls the bowstring further back towards her face | `drawing_bow` |
-| `0.5` | draws the arrow back towards her cheek | `drawing_bow`, `aiming` |
-| `0.9` | reaches back to grab an arrow from the quiver | `reaching`, `hand_near_head` |
+On the sample portrait - an archer with an arrow nocked - every combination of the two sliders now proposes a moving panel. The time axis is directionally right but not dramatic: `0.1` and `0.5` both draw the bow, one further than the other. The weak corner is a long time with a narrow latitude, where the character may not go anywhere and the model settles for turning her head.
 
 `次のコマも生成する（出力2〜4）` is on by default, so every run leaves the current result in prompt box 1 and fills boxes 2-4 with proposals for the moment just after it. The follow-up continues the tags and description the first run already resolved, and a failure in it leaves the box 1 result intact with the reason in the status line. Turn it off to get plain `出力数` variants across all four boxes.
 
-`次のコマの変化量` (0.0-1.0, default 0.5) decides how far a panel may drift. Every preserved aspect is force-prefixed onto the proposal, so the preserve set is the real brake, and a deterministic model returns near-identical variants; the slider moves both together:
+Two sliders describe the panel to ask for, because one was doing the work of both and they pull in different directions. Bundled, asking for a bigger change made the panel move *less*: the preserved set shrank, so tags were dropped rather than actions advanced.
 
-| 変化量 | Preserved | Temperature | Result |
-| --- | --- | --- | --- |
-| `0.0`-`0.3` | character, appearance, clothing | `0.0` | gaze and limbs shift, nothing else |
-| `0.4`-`0.6` | character, appearance | `0.5` | pose, gaze, or expression clearly changes |
-| `0.7`-`1.0` | character | `0.85` | pose, framing, camera, and background may all move |
+`経過する時間` (0.0-1.0, default 0.3) says how far the action advances, and how speculative the answer may be - the further ahead you look, the less the picture determines:
+
+| 経過する時間 | The next panel is | Temperature |
+| --- | --- | --- |
+| `0.0`-`0.3` | a fraction of a second later; the action advances a fraction | `0.0` |
+| `0.4`-`0.6` | a second or two later; the action reaches its next stage | `0.5` |
+| `0.7`-`1.0` | several seconds later; that action is over and the next has begun | `0.6` |
+
+`変わってよい範囲` (0.0-1.0, default 0.5) says nothing about time. It decides what the answer may touch, and its aspects can never be removed from the proposal:
+
+| 変わってよい範囲 | Preserved | May differ in |
+| --- | --- | --- |
+| `0.0`-`0.3` | character, appearance, clothing | pose, gaze and framing only |
+| `0.4`-`0.6` | character, appearance | pose, framing and clothing |
+| `0.7`-`1.0` | character | anything except who the character is |
 
 An image with no instruction is otherwise routed to plain tag extraction, so the main controls also carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and fills all four boxes with panels at the selected change amount.
 

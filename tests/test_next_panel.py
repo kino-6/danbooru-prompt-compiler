@@ -3,6 +3,7 @@ from __future__ import annotations
 from danbooru_prompt_compiler.next_panel import (
     build_next_panel_request,
     described_moment,
+    normalize_panel_answer,
     panel_moved,
     protected_tags,
 )
@@ -54,13 +55,15 @@ def test_the_request_asks_for_the_sentence_before_the_tags() -> None:
     request = build_next_panel_request(
         CURRENT,
         description="弓を構える少女",
-        movement="clearly - the pose plainly changes",
+        movement="a second or two - the action reaches its next stage",
+        latitude="the pose and the framing only",
         protected=["1girl", "long_hair"],
     )
 
     assert "Tags of the current panel: 1girl, solo" in request
     assert "弓を構える少女" in request
-    assert "clearly - the pose plainly changes" in request
+    assert "How much time passes: a second or two" in request
+    assert "What may be different: the pose and the framing only" in request
     assert "must not be removed: 1girl, long_hair" in request
     # The sentence comes first so that it drags the tags along behind it.
     assert request.index("Next:") < request.index("Remove:") < request.index("Add:")
@@ -79,3 +82,38 @@ def test_the_moment_sentence_is_read_back_and_a_missing_one_is_survivable() -> N
     )
     assert described_moment("Remove: none\nAdd: none") == ""
     assert described_moment("") == ""
+
+
+def test_an_answer_that_drops_the_labels_is_relabelled_rather_than_discarded() -> None:
+    # Measured: the model answers in the right shape without the prefixes, and
+    # the content is exactly right. Throwing it away lost the best proposals.
+    bare = (
+        "The character pulls the bowstring back further to prepare for the shot.\n"
+        "from_side, holding_bow_(weapon)\n"
+        "aiming, drawing_bow, looking_at_viewer"
+    )
+
+    normalized = normalize_panel_answer(bare)
+
+    assert "Next: The character pulls the bowstring back further" in normalized
+    assert "Remove: from_side, holding_bow_(weapon)" in normalized
+    assert "Add: aiming, drawing_bow, looking_at_viewer" in normalized
+    assert described_moment(normalized).startswith("The character pulls")
+
+
+def test_a_labelled_answer_is_left_exactly_as_it_is() -> None:
+    labelled = "Next: she draws the bow.\nRemove: holding_bow_(weapon)\nAdd: drawing_bow"
+
+    assert normalize_panel_answer(labelled) == labelled
+
+
+def test_prose_is_not_mistaken_for_the_three_line_shape() -> None:
+    # Three lines, but the last two are sentences rather than tag lists.
+    prose = (
+        "She stands with the bow.\n"
+        "Then she draws it back, slowly.\n"
+        "The arrow points at the ground."
+    )
+
+    assert normalize_panel_answer(prose) == prose
+    assert normalize_panel_answer("just one line") == "just one line"

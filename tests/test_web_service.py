@@ -447,16 +447,19 @@ def test_service_uses_inferred_tags_as_next_panel_base() -> None:
     assert "moment_after" not in result.output
 
 
+# The two sliders are deliberately crossed here: the change value decides what
+# is preserved and nothing about temperature, and the time value the reverse.
 @pytest.mark.parametrize(
-    "change, preserved, temperature",
+    "change, moment, preserved, temperature",
     [
-        (0.0, "character, appearance, clothing", 0.0),
-        (0.5, "character, appearance", 0.5),
-        (1.0, "character", 0.85),
+        (0.0, 1.0, "character, appearance, clothing", 0.6),
+        (0.5, 0.5, "character, appearance", 0.5),
+        (1.0, 0.0, "character", 0.0),
     ],
 )
 def test_next_panel_change_controls_what_is_held_fixed(
     change: float,
+    moment: float,
     preserved: str,
     temperature: float,
 ) -> None:
@@ -478,6 +481,7 @@ def test_next_panel_change_controls_what_is_held_fixed(
         base_prompt="",
         general_threshold=0.4,
         next_panel_change=change,
+        next_panel_time=moment,
     )
 
     assert f"維持する要素: {preserved}。" in compiler.last_request.edit_instruction

@@ -302,7 +302,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload"]
     assert components["出力数"]["props"]["value"] == 4
-    change_props = components["次のコマの変化量"]["props"]
+    change_props = components["変わってよい範囲"]["props"]
     assert (change_props["minimum"], change_props["maximum"]) == (0.0, 1.0)
     assert change_props["value"] == 0.5
     assert _folded_ancestor_labels(app, "next-panel-change") == []
@@ -439,7 +439,8 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     assert input_labels[WEB_RUN_FIELDS.index("instruction")] == "どうしたい？"
     assert input_labels[WEB_RUN_FIELDS.index("variants")] == "出力数"
     assert input_labels[WEB_RUN_FIELDS.index("edited_description")] == "画像の説明（VLM）"
-    assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "次のコマの変化量"
+    assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "変わってよい範囲"
+    assert input_labels[WEB_RUN_FIELDS.index("next_panel_time")] == "経過する時間"
     assert (
         input_labels[WEB_RUN_FIELDS.index("scene_template")]
         == "自然文プロンプトのテンプレート"
