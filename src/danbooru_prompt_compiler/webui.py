@@ -142,6 +142,13 @@ IMAGE_INPUT_JS = r"""
     return true;
   };
 
+  // Gradio's own dropzone exists only while the workspace is empty, and it
+  // handled that case correctly long before this file did. Taking it over
+  // gained nothing and put the first load at risk, so the handler below steps
+  // in only once there is an image in the way.
+  const workspaceHasImage = () =>
+    !!document.querySelector("#image-workspace img");
+
   const isTextEntry = (element) =>
     element instanceof Element &&
     (element.isContentEditable ||
@@ -150,16 +157,18 @@ IMAGE_INPUT_JS = r"""
 
   document.addEventListener("dragover", (event) => {
     if (!isImageWorkspace(event)) return;
-    // Claim every drag over the workspace. Gradio's own dropzone disappears once
-    // an image is loaded, and a dragover nobody cancels means the browser
-    // refuses the drop and the file never arrives.
-    event.preventDefault();
+    const types = Array.from(event.dataTransfer?.types || []);
+    // A dragover nobody cancels tells the browser this is not a drop target and
+    // the drop never fires. Gradio cancels it for files while it still owns the
+    // empty workspace; once an image is loaded nobody does but us.
+    if (!types.includes("Files") || workspaceHasImage()) event.preventDefault();
   }, true);
   document.addEventListener("drop", (event) => {
     if (!isImageWorkspace(event)) return;
     const dropped = Array.from(event.dataTransfer?.files || [])
       .find((file) => (file.type || "").startsWith("image/"));
     if (dropped) {
+      if (!workspaceHasImage()) return;
       // Feed the file in the same way a paste does, rather than leaving it to a
       // dropzone that is not there when the workspace already holds an image.
       event.preventDefault();

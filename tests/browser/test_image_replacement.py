@@ -336,7 +336,7 @@ def test_dropping_a_file_replaces_an_already_loaded_image(tmp_path) -> None:
             browser.close()
 
 
-def test_dropping_a_file_onto_an_empty_workspace_still_loads_it(tmp_path) -> None:
+def test_an_empty_workspace_is_left_to_gradios_own_dropzone(tmp_path) -> None:
     image = tmp_path / "only.png"
     Image.new("RGB", (4, 4), "purple").save(image)
 
@@ -348,12 +348,23 @@ def test_dropping_a_file_onto_an_empty_workspace_still_loads_it(tmp_path) -> Non
             page.wait_for_function(
                 "document.documentElement.dataset.imageUrlDropReady === 'true'"
             )
-            # The handler now claims file drops in both states, so the empty case
-            # has to keep working through the same path.
+            # Gradio handled the empty case correctly before this handler existed,
+            # so the handler must not touch it: taking it over gained nothing and
+            # put the first load of the session at risk.
             page.evaluate(
                 DROP_FILE_JS,
                 [base64.b64encode(image.read_bytes()).decode("ascii"), "only.png"],
             )
+            page.wait_for_timeout(500)
 
+            assert (
+                page.evaluate(
+                    "() => document.querySelector('#image-workspace input').files.length"
+                )
+                == 0
+            )
+            # And the click path, which is what a synthetic drop cannot exercise,
+            # still loads the first image.
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
             expect(page.locator('#image-workspace img[src*="only.png"]')).to_be_visible()
             browser.close()
