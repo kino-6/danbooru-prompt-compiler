@@ -21,6 +21,7 @@ AVOID_SECTION = "Avoid"
 DELIVERY_SECTION = "Delivery"
 SECTION_PATTERN = re.compile(r"^\s*[-*]?\s*\**([A-Za-z][A-Za-z /]*?)\**\s*[:：]\s*(.+?)\s*$")
 FENCE_PATTERN = re.compile(r"^\s*```.*$")
+QUALIFIER_PATTERN = re.compile(r"_\([^)]*\)")
 
 
 @dataclass(frozen=True)
@@ -64,13 +65,23 @@ def build_scene_prompt(
     instruction: str,
     base_prompt: str,
     avoid_terms: list[str],
+    sees_image: bool = False,
 ) -> str:
-    """The request handed to the text model, one section per template slot."""
+    """The request handed to the model, one section per template slot.
+
+    ``sees_image`` says the reference image travels with the request. A vision
+    model writes the richer paragraph from the picture, but it reads the picture
+    as a whole and lets discrete features go: asked to describe the sample
+    portrait it dropped ``pointy_ears`` and ``elf``, which the tagger had scored
+    at 0.92. So the tags are named as observed facts either way, and the model is
+    told to account for all of them.
+    """
     section_lines = [
         f"{name}: {guidance}" for name, guidance in template.sections
     ]
+    observed = ", ".join(humanize_tags(image_tags))
     known = [
-        _labelled("Danbooru tags of the reference image", ", ".join(image_tags)),
+        _labelled("Observed in the reference image", observed),
         _labelled("Description of the reference image", image_description),
         _labelled("Existing prompt", base_prompt),
         _labelled("User request", instruction),
@@ -82,6 +93,9 @@ def build_scene_prompt(
             "You write prompts for a natural-language image model.",
             template.task,
             "",
+            "The reference image is attached. Write from what you can see in it."
+            if sees_image
+            else None,
             "Fill in every section below on its own line, in this exact order, "
             "using the format `Section: content`.",
             "Write plain English sentence fragments, not tag lists, and describe "
@@ -93,6 +107,7 @@ def build_scene_prompt(
             *section_lines,
             "",
             *[part for part in known if part],
+            _observed_request(observed),
             "",
             _avoid_request(avoid_terms),
         )
@@ -126,6 +141,22 @@ def render_scene_prompt(
     if avoid_terms:
         lines.append(f"{AVOID_SECTION}: {', '.join(avoid_terms)}")
     return "\n".join(lines).strip()
+
+
+def humanize_tags(tags: list[str]) -> list[str]:
+    """Danbooru tags as words a prose model can use.
+
+    A qualifier only means something inside the dictionary - ``bow_(weapon)``
+    separates the weapon from the ribbon - and a prose model writes the
+    parenthesis straight into the paragraph. It is dropped, and the rest of the
+    reference material is left to disambiguate.
+    """
+    humanized: list[str] = []
+    for tag in tags:
+        cleaned = QUALIFIER_PATTERN.sub("", tag).replace("_", " ").strip()
+        if cleaned and cleaned not in humanized:
+            humanized.append(cleaned)
+    return humanized
 
 
 def humanize_avoid_terms(terms: list[str]) -> list[str]:
@@ -162,6 +193,15 @@ def _read_template(path: Path) -> SceneTemplate | None:
 def _labelled(label: str, value: str) -> str:
     value = (value or "").strip()
     return f"{label}: {value}" if value else ""
+
+
+def _observed_request(observed: str) -> str:
+    if not observed:
+        return ""
+    return (
+        "Every term listed as observed was detected in the reference image. "
+        "Treat them as facts and account for all of them across the sections."
+    )
 
 
 def _avoid_request(avoid_terms: list[str]) -> str:

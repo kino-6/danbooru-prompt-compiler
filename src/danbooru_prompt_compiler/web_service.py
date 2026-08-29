@@ -95,6 +95,7 @@ class WebRunRequest(BaseModel):
     next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE
     scene_template: str = DEFAULT_SCENE_TEMPLATE
     scene_model: str = DEFAULT_SCENE_MODEL
+    scene_sees_image: bool = False
     edited_tags: str = ""
     edited_description: str = ""
     action_override: str = "auto"
@@ -235,6 +236,7 @@ class WebPromptService:
         next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE,
         scene_template: str = "",
         scene_model: str = "",
+        scene_sees_image: bool = False,
         edited_tags: str = "",
         edited_description: str = "",
         action_override: str = "auto",
@@ -319,6 +321,7 @@ class WebPromptService:
                 variants=variants,
                 ollama_url=ollama_url,
                 scene_model=scene_model or compiler_model,
+                image_path=image_path if scene_sees_image else "",
             )
             result = WebRunResult(
                 action_plan=_plan_dict(routed),
@@ -445,6 +448,7 @@ class WebPromptService:
         variants: int,
         ollama_url: str,
         scene_model: str,
+        image_path: str = "",
     ) -> list[str]:
         if not image_tags and not image_description and not instruction and not base_prompt:
             raise ValueError(
@@ -464,6 +468,7 @@ class WebPromptService:
             instruction=instruction,
             base_prompt=base_prompt,
             avoid_terms=avoid_terms,
+            sees_image=bool(image_path),
         )
         client = self.text_factory(ollama_url, scene_model)
         response = client.generate(
@@ -472,6 +477,7 @@ class WebPromptService:
                 variants=variants,
                 # Prose needs room to vary; identical variants are worthless here.
                 temperature=SCENE_PROMPT_TEMPERATURE,
+                image_paths=[image_path] if image_path else [],
             )
         )
         return [

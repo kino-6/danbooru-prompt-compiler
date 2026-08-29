@@ -570,6 +570,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "next_panel_change": controls.next_panel_change,
         "scene_template": controls.scene_template,
         "scene_model": settings.scene_model,
+        "scene_sees_image": settings.scene_sees_image,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": settings.action_override,
@@ -775,6 +776,16 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                     "ここだけ大きめのローカルモデルにできます。空欄ならプロンプト生成モデルを使います。"
                 ),
             )
+            scene_sees_image = gr.Checkbox(
+                value=False,
+                label="自然文プロンプトに画像を渡す",
+                elem_id="scene-sees-image-input",
+                info=(
+                    "自然文プロンプト用モデルがVLMのときだけ有効です。"
+                    "画像を直接見て書くぶん描写は濃くなりますが、"
+                    "タグは事実として併せて渡すので特徴は落ちません。"
+                ),
+            )
             allow_private_image_urls = gr.Checkbox(
                 value=False,
                 label="プライベート画像URLを許可",
@@ -832,6 +843,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         ollama_url=ollama_url,
         vision_model=vision_model,
         scene_model=scene_model,
+        scene_sees_image=scene_sees_image,
         allow_private_image_urls=allow_private_image_urls,
         action_override=action_override,
         diagnostic_button=diagnostic_button,

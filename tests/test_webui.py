@@ -442,6 +442,10 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     )
     assert input_labels[WEB_RUN_FIELDS.index("scene_model")] == "自然文プロンプト用モデル"
     assert (
+        input_labels[WEB_RUN_FIELDS.index("scene_sees_image")]
+        == "自然文プロンプトに画像を渡す"
+    )
+    assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"
     )

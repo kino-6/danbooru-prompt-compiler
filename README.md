@@ -156,6 +156,23 @@ Everything here runs on the same local Ollama instance as the tag pipeline; noth
 
 Templates are plain YAML in `templates/`; drop a file in with `label`, `task`, `sections`, `delivery`, and an optional `order`, and it appears in the dropdown on the next launch. The model only fills the sections in - the shape is rebuilt locally afterwards, so a dropped or reordered section never corrupts the output.
 
+`自然文プロンプトに画像を渡す` in the advanced settings hands the reference image to the prose model
+itself, which only makes sense when `自然文プロンプト用モデル` names a vision model such as
+`unseen-gemma4:26b`. It is off by default because the default prose model cannot read an image.
+
+The tags are still sent when it is on, and the request names them as facts observed in the image.
+That is deliberate: on the sample portrait the model wrote a visibly richer `Clothing` section from
+the picture - collar, vest, waist pouch, skirt, boots, none of which the tag list carried - but
+describing the image alone dropped `pointy_ears` and `elf`, which the tagger had scored at 0.92.
+Tags anchor the discrete features, the image supplies the texture. Danbooru qualifiers are stripped
+on the way in, so `bow_(weapon)` reaches the model as `bow` rather than leaking a parenthesis into
+the paragraph.
+
+One caveat: given the picture, the model will state attributes the picture does not fix. On a
+monochrome line-art reference it wrote `long blonde hair` and `light eye colour`. That is useful on
+a character sheet and wrong on a faithful description, so check the colour words before reusing the
+output as a caption.
+
 The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only from the button or the `操作種別` selector.
 
 Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.

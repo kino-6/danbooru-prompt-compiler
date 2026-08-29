@@ -8,6 +8,7 @@ from danbooru_prompt_compiler.scene_prompt import (
     build_scene_prompt,
     find_template,
     humanize_avoid_terms,
+    humanize_tags,
     load_templates,
     render_scene_prompt,
 )
@@ -112,3 +113,58 @@ def test_avoid_terms_read_as_words_not_tags() -> None:
         "simple background",
         "bar censor",
     ]
+
+
+def test_humanize_tags_drops_qualifiers_and_collapses_the_duplicates_it_makes() -> None:
+    # Two tags can share a word once the qualifier goes. The reference image is
+    # what tells them apart afterwards, so the duplicate is not worth keeping.
+    assert humanize_tags(["bow_(weapon)", "bow_(ornament)", "long_hair"]) == [
+        "bow",
+        "long hair",
+    ]
+
+
+def test_request_names_the_tags_as_observed_facts_without_their_qualifiers() -> None:
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=["bow_(weapon)", "arrow_(projectile)", "pointy_ears"],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=humanize_avoid_terms(["bar_censor", "*censor*"]),
+    )
+
+    assert "Observed in the reference image: bow, arrow, pointy ears" in request
+    assert "(weapon)" not in request
+    assert "Every term listed as observed was detected in the reference image" in request
+    # Exclusion words are the user's own wording, wildcards included, so they are
+    # humanized on their own terms rather than run through the tag rules.
+    assert "bar censor, *censor*" in request
+
+
+def test_the_attached_image_is_announced_only_when_it_travels_with_the_request() -> None:
+    options = dict(
+        image_tags=["1girl"],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=[],
+    )
+    attached = "The reference image is attached."
+
+    assert attached in build_scene_prompt(TEMPLATE, sees_image=True, **options)
+    assert attached not in build_scene_prompt(TEMPLATE, **options)
+
+
+def test_a_request_without_tags_makes_no_claim_about_observations() -> None:
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=[],
+        image_description="",
+        instruction="雨の神社",
+        base_prompt="",
+        avoid_terms=[],
+    )
+
+    assert "Observed in the reference image" not in request
+    assert "was detected in the reference image" not in request

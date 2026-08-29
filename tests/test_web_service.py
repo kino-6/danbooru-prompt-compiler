@@ -798,3 +798,31 @@ def test_service_exposes_variants_as_separate_candidates() -> None:
     assert result.candidates[1] == "1girl\nlooking_back"
     assert "[variant 1]\n" + result.candidates[0] in result.output
     assert "[variant 2]\n" + result.candidates[1] in result.output
+
+
+def test_the_prose_model_sees_the_image_only_when_the_setting_is_on() -> None:
+    plan = ActionPlan(action=WebAction.scene_prompt)
+    text_client = RecordingTextClient(["Subject: a young woman", "Subject: a young woman"])
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        text_factory=lambda _url, _model: text_client,
+        scene_templates=SCENE_TEMPLATES,
+    )
+    options = dict(
+        image_path="sample.png",
+        instruction="ポスターにして",
+        base_prompt="",
+        scene_template="poster",
+        general_threshold=0.4,
+    )
+
+    service.run(scene_sees_image=True, **options)
+    assert text_client.last_request.image_paths == ["sample.png"]
+    assert "The reference image is attached." in text_client.last_request.prompt
+
+    # The default prose model is text-only, so the picture stays behind unless
+    # the setting says the model can read it.
+    service.run(scene_sees_image=False, **options)
+    assert text_client.last_request.image_paths == []
+    assert "The reference image is attached." not in text_client.last_request.prompt

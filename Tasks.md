@@ -15,19 +15,19 @@ richer prose than the tag route but silently dropped `pointy_ears` and `elf`, wh
 Tagger scored at 0.92. Handing it the image *and* the tags recovered every dropped feature
 and kept the richer prose, so the tags stay in as factual anchors rather than being replaced.
 
-- [ ] Send the reference image to the prose model when the setting is on and an image exists.
-- [ ] State in the request that the tags are facts observed in the image and must all appear.
-- [ ] Strip Danbooru qualifiers before the tags reach a prose model, so `bow_(weapon)` reads
+- [x] Send the reference image to the prose model when the setting is on and an image exists.
+- [x] State in the request that the tags are facts observed in the image and must all appear.
+- [x] Strip Danbooru qualifiers before the tags reach a prose model, so `bow_(weapon)` reads
       as `bow` instead of leaking `bow (weapon)` into the paragraph.
-- [ ] Leave the setting off by default, because the default prose model is text-only.
+- [x] Leave the setting off by default, because the default prose model is text-only.
 
 ### Gate
 
-- [ ] Unit test proves the image reaches the prose client only when the setting is on.
-- [ ] Unit test proves the request names the tags as observed facts.
-- [ ] Unit test proves qualifiers are stripped and the avoid list keeps its own wording.
-- [ ] Unit test proves the setting appears in the run inputs in request-model order.
-- [ ] The full test suite and CI pass.
+- [x] Unit test proves the image reaches the prose client only when the setting is on.
+- [x] Unit test proves the request names the tags as observed facts.
+- [x] Unit test proves qualifiers are stripped and the avoid list keeps its own wording.
+- [x] Unit test proves the setting appears in the run inputs in request-model order.
+- [x] The full test suite and CI pass (150 passed, 1 browser-only skip; 8 Chromium E2E passed).
 
 ## Task 29 — Choose a vision model instead of typing one
 
