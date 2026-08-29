@@ -32,6 +32,60 @@ ollama serve
 ollama pull llama3.2
 ```
 
+See [Local Model Environment](#local-model-environment) for the full model roster, the
+uncensored vision model, and the measured VRAM and throughput figures.
+
+## Local Model Environment
+
+Everything runs against a local Ollama instance. The table below is the model roster the
+Web UI expects; the roles map to the model selectors in the advanced settings.
+
+| Role | Model | Size | Pull |
+| --- | --- | --- | --- |
+| Router + prompt generation | `qwen3:1.7b` | 1.4 GB | `ollama pull qwen3:1.7b` |
+| Vision description (default) | `qwen3-vl:8b` | 6.1 GB | `ollama pull qwen3-vl:8b` |
+| Vision description (uncensored) | `unseen-gemma4:26b` | 17 GB | see below |
+| Natural-language prompts | any larger local model | - | `ollama pull qwen3:8b` |
+| Image tagging | `SmilingWolf/wd-vit-tagger-v3` | 379 MB | automatic, ONNX, not Ollama |
+
+`unseen-gemma4:26b` is an uncensored Gemma 4 26B MoE vision model aimed at anime character
+analysis and captioning. It is the alternative to `qwen3-vl:8b` when the default vision model
+sanitizes or refuses a description. Ollama 0.33.0 or newer is required - earlier builds do not
+know the `gemma4` architecture.
+
+```bash
+ollama pull hf.co/Jommarn/UNSEEN_Gemma_4_26B_NSFW-GGUF:Q4_K_M
+ollama cp hf.co/Jommarn/UNSEEN_Gemma_4_26B_NSFW-GGUF:Q4_K_M unseen-gemma4:26b
+```
+
+The Hugging Face bridge pulls the vision projector (`mmproj`, 599 MB) alongside the 16 GB
+weights, so no Modelfile is needed. The `ollama cp` step only writes a second manifest over the
+same blobs and costs no extra disk. Verify the projector actually loaded by describing an image
+with readable text in it; a text-only import answers without ever seeing the picture.
+
+### Measured reference
+
+Recorded on Windows 11, RTX 5080 (16 GB VRAM), 64 GB RAM, Ollama 0.33.2:
+
+| | `unseen-gemma4:26b` |
+| --- | --- |
+| Throughput, warm | 88-91 tok/s |
+| First load from disk | ~97 s |
+| Offload split | 76% GPU / 24% CPU |
+| VRAM resident | 15.7 / 16.3 GB |
+| Context | 4096 (Ollama default) |
+
+Being a mixture-of-experts model, it stays fast even with a quarter of the layers on CPU. Two
+constraints follow from the VRAM figure on a 16 GB card:
+
+- Raising `num_ctx` above the 4096 default pushes GPU layers back to the CPU and costs far more
+  than the extra context is worth. The weights support 262144 tokens; this card does not.
+- It cannot be resident next to `qwen3-vl:8b`. Ollama evicts and reloads on each switch, which
+  is the ~97 s figure above, so pick one vision model per session rather than alternating.
+
+The vision factory already sends `think=false`, which suppresses the `<|channel>thought` reasoning
+trace this model otherwise emits. Anything calling it outside that factory needs the same flag.
+
 ## Quick Start
 
 Infer Danbooru tags directly from an image (the ONNX model is downloaded and cached on first use):
