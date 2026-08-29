@@ -396,8 +396,11 @@ def test_secondary_webui_sections_are_folded() -> None:
     assert accordions["既存プロンプトから編集（任意）"] is False
     assert accordions["詳細設定"] is False
     assert accordions["画像タグの確認・修正"] is False
-    assert accordions["候補の採用・履歴"] is False
-    assert accordions["実行情報"] is False
+    # Candidates, history, and the run plan are all post-run inspection, so they
+    # sit behind one heading rather than three.
+    assert accordions["実行の詳細"] is False
+    assert "候補の採用・履歴" not in accordions
+    assert "実行情報" not in accordions
 
 
 def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:

@@ -50,20 +50,24 @@ TASK_CHOICES: tuple[tuple[str, str], ...] = (
 TASK_FIELDS: dict[str, frozenset[str]] = {
     "auto": frozenset(
         {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
-         "variants", "run", "next_panel"}
+         "variants", "run", "next_panel", "outputs_extra"}
     ),
     # Tagging is pure ONNX: no instruction to give, no model to describe with.
     "tag_image": frozenset({"run"}),
-    "compile": frozenset({"instruction", "follow_up", "variants", "run"}),
+    "compile": frozenset(
+        {"instruction", "follow_up", "variants", "run", "outputs_extra"}
+    ),
     "edit": frozenset(
-        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
+        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run",
+         "outputs_extra"}
     ),
     "next_panel": frozenset(
-        {"vision", "instruction", "panel_change", "variants", "next_panel"}
+        {"vision", "instruction", "panel_change", "variants", "next_panel",
+         "outputs_extra"}
     ),
     "scene_prompt": frozenset(
         {"vision", "instruction", "base_prompt", "variants", "scene_template",
-         "scene_settings", "scene_prompt"}
+         "scene_settings", "scene_prompt", "outputs_extra"}
     ),
     # The review reads the description as context but takes no instruction, and
     # it answers with one list rather than a number of variants.
@@ -83,6 +87,7 @@ TASK_FIELD_ORDER: tuple[str, ...] = (
     "run",
     "next_panel",
     "scene_prompt",
+    "outputs_extra",
 )
 
 
@@ -467,8 +472,9 @@ def build_app(*, service: WebPromptService | None = None):
             "scene_template": [controls.scene_template],
             "scene_settings": [settings.scene_settings_box],
             "run": [controls.run_button],
-            "next_panel": [controls.next_panel_button, controls.next_panel_hint],
+            "next_panel": [controls.next_panel_button],
             "scene_prompt": [controls.scene_prompt_button],
+            "outputs_extra": results.extra_prompts,
         }
         assert tuple(task_components) == TASK_FIELD_ORDER
 
@@ -711,7 +717,7 @@ def _build_task_selector(gr) -> SimpleNamespace:
         value="auto",
         label="やりたいこと",
         elem_id="task-selector",
-        info="選んだ内容に関係する入力だけを表示します。",
+        info="関係する入力だけを表示します。",
     )
     return SimpleNamespace(action_override=action_override)
 
@@ -724,7 +730,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             sources=["upload"],
             label="画像",
             placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
-            height=400,
+            height=320,
             interactive=True,
             elem_id="image-workspace",
             buttons=["fullscreen"],
@@ -766,7 +772,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             use_vision = gr.Checkbox(
                 value=True,
                 label="VLMで画像を説明する",
-                info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
+                info="ポーズや位置関係の解析にも使います。",
             )
             with gr.Row():
                 recover_vision_button = gr.Button(
@@ -774,9 +780,9 @@ def _build_image_column(gr) -> SimpleNamespace:
                     elem_id="recover-vision-button",
                     size="sm",
                 )
-            recover_vision_status = gr.Markdown(
-                "VLMが応答しなくなったら押してください。モデルを解放して読み込み直します。"
-            )
+            # The hint only matters once the button has been pressed, so it
+            # takes no room on the page before then.
+            recover_vision_status = gr.Markdown()
             description = gr.Textbox(
                 label="画像の説明（VLM）",
                 lines=4,
@@ -784,10 +790,7 @@ def _build_image_column(gr) -> SimpleNamespace:
                 interactive=True,
                 elem_id="image-description-editor",
                 placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
-                info=(
-                    "タグが少ないときの補足に使えます。"
-                    "直接書き換えるとVLMを再実行せず、その内容をそのまま使います。"
-                ),
+                info="書き換えるとVLMを再実行せず、その内容を使います。",
             )
     return SimpleNamespace(
         workspace=workspace,
@@ -810,7 +813,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         instruction = gr.Textbox(
             label="どうしたい？",
             placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
-            lines=5,
+            lines=3,
         )
         with gr.Accordion("既存プロンプトから編集（任意）", open=False) as base_prompt_box:
             base_prompt = gr.Textbox(
@@ -822,7 +825,6 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         generate_next_panel = gr.Checkbox(
             value=True,
             label="次のコマも生成する（出力2〜4）",
-            info="出力1に現在の結果、出力2〜4に一瞬後の場面の候補を入れます。",
         )
         next_panel_change = gr.Slider(
             0.0,
@@ -831,17 +833,13 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             step=0.1,
             label="次のコマの変化量",
             elem_id="next-panel-change",
-            info=(
-                "小さいほど元の画像に忠実で、大きいほど姿勢・構図・背景まで動きます。"
-                "0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。"
-            ),
+            info="0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。",
         )
         with gr.Row() as variants_box:
             variants = gr.Radio(
                 choices=[1, 2, 3, 4],
                 value=4,
                 label="出力数",
-                info="「次のコマも生成する」がオフのときの出力数です。",
             )
         scene_template = gr.Dropdown(
             choices=[(template.label, template.name) for template in load_templates()],
@@ -863,10 +861,6 @@ def _build_instruction_column(gr) -> SimpleNamespace:
                 visible=False,
             )
             cancel_button = gr.Button("停止", variant="stop")
-        next_panel_hint = gr.Markdown(
-            "「次のコマ」ボタンは指示がなくても押せます。画像だけを置いて押すと、"
-            "4枠すべてに一瞬後の場面を提案します。"
-        )
     return SimpleNamespace(
         instruction=instruction,
         base_prompt=base_prompt,
@@ -879,7 +873,6 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         scene_prompt_button=scene_prompt_button,
         run_button=run_button,
         next_panel_button=next_panel_button,
-        next_panel_hint=next_panel_hint,
         cancel_button=cancel_button,
     )
 
@@ -1002,23 +995,29 @@ def _build_result_section(gr) -> SimpleNamespace:
             elem_id="inferred-tags-editor",
             info="必要な場合だけ修正して、もう一度実行してください。",
         )
+    def prompt_box(number: int):
+        return gr.Textbox(
+            label=f"出力プロンプト {number}",
+            lines=4,
+            buttons=["copy"],
+            interactive=True,
+            elem_id=f"prompt-output-{number}",
+        )
+
+    # Boxes 2-4 come and go together: a task that answers with one list has no
+    # use for three empty boxes the height of the answer.
     prompts = []
-    for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
-        with gr.Row():
-            for index in range(row_start, row_start + 2):
-                prompts.append(
-                    gr.Textbox(
-                        label=f"出力プロンプト {index + 1}",
-                        lines=5,
-                        buttons=["copy"],
-                        interactive=True,
-                        elem_id=f"prompt-output-{index + 1}",
-                    )
-                )
+    with gr.Row():
+        prompts.append(prompt_box(1))
+        second_prompt = prompt_box(2)
+        prompts.append(second_prompt)
+    with gr.Row() as extra_prompt_row:
+        prompts.append(prompt_box(3))
+        prompts.append(prompt_box(4))
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
-    with gr.Accordion("候補の採用・履歴", open=False):
+    with gr.Accordion("実行の詳細", open=False):
         with gr.Row():
             candidate_selector = gr.Radio(
                 choices=[],
@@ -1026,11 +1025,11 @@ def _build_result_section(gr) -> SimpleNamespace:
             )
             adopt_button = gr.Button("選択候補を採用")
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
-    with gr.Accordion("実行情報", open=False):
         action_plan = gr.JSON(label="実行計画")
     return SimpleNamespace(
         inferred_tags=inferred_tags,
         prompts=prompts,
+        extra_prompts=[second_prompt, extra_prompt_row],
         history_state=history_state,
         candidate_selector=candidate_selector,
         adopt_button=adopt_button,
