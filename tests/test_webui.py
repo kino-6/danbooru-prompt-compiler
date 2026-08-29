@@ -286,7 +286,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert description_props["interactive"] is True
     assert description_props["elem_id"] == "image-description-editor"
     action_values = {
-        value for _label, value in components["操作種別"]["props"]["choices"]
+        value for _label, value in components["やりたいこと"]["props"]["choices"]
     }
     assert action_values == {
         "auto",
@@ -669,3 +669,73 @@ def test_vision_model_offers_the_known_entries_and_still_takes_a_typed_name() ->
     labels = [label for label, _value in vision["props"]["choices"]]
     assert any("無検閲" in label for label in labels)
     assert any("既定" in label for label in labels)
+
+
+def test_every_task_choice_has_a_visibility_entry() -> None:
+    # A task with no entry would silently fall back to the auto layout and show
+    # controls its action cannot reach.
+    offered = {value for _label, value in webui.TASK_CHOICES}
+
+    assert offered == set(webui.TASK_FIELDS)
+    assert set(webui.TASK_FIELD_ORDER) == {
+        name for shown in webui.TASK_FIELDS.values() for name in shown
+    }
+
+
+def test_a_task_shows_only_what_its_action_can_reach() -> None:
+    def shown(task: str) -> set[str]:
+        return {
+            name
+            for name, visible in zip(
+                webui.TASK_FIELD_ORDER, webui.task_field_visibility(task)
+            )
+            if visible
+        }
+
+    # Tagging is pure ONNX, so nothing about models or instructions applies.
+    assert shown("tag_image") == {"run"}
+    # The prose task is the only one that can use the template or its settings.
+    assert {"scene_template", "scene_settings", "scene_prompt"} <= shown("scene_prompt")
+    assert "scene_template" not in shown("auto")
+    assert "scene_template" not in shown("next_panel")
+    # The review takes no instruction and returns one list, not variants.
+    assert "instruction" not in shown("verify_tags")
+    assert "variants" not in shown("verify_tags")
+    # The router can never choose the manual-only actions, so the auto layout
+    # must not offer their controls either.
+    assert "scene_prompt" not in shown("auto")
+
+
+def test_an_unknown_task_falls_back_to_the_auto_layout() -> None:
+    assert webui.task_field_visibility("nonsense") == webui.task_field_visibility("auto")
+
+
+def test_the_task_selector_sits_above_the_page_and_drives_visibility() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    selector = components["やりたいこと"]
+
+    assert selector["props"]["value"] == "auto"
+    # One dependency updates exactly the toggled groups when the task changes.
+    toggling = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if any(
+            target == (selector["id"], "change")
+            for target in dependency.get("targets") or []
+        )
+    ]
+    assert len(toggling) == 1
+    # At least one per field name, and more where a name owns several components.
+    assert len(toggling[0]["outputs"]) >= len(webui.TASK_FIELD_ORDER)
+
+
+def test_controls_the_default_task_cannot_use_start_hidden() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    # The first render has to agree with the auto layout, or the page opens
+    # showing controls that the selector would immediately take away.
+    assert components["自然文プロンプトのテンプレート"]["props"]["visible"] is False
+    assert components["自然文プロンプト用モデル"]["props"]["visible"] is not False
+    assert components["どうしたい？"]["props"]["visible"] is not False

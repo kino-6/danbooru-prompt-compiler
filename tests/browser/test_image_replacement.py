@@ -164,7 +164,11 @@ def test_scene_prompt_button_runs_with_the_selected_template(tmp_path) -> None:
             page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
             expect(page.locator('#image-workspace img[src*="scene.png"]')).to_be_visible()
 
-            # Both the template picker and the trigger sit in the main controls.
+            # The template picker and the trigger are hidden until the task asks
+            # for them, so picking the task is the first step of the flow now.
+            page.locator("#task-selector").get_by_text("自然文プロンプト", exact=True).click()
+            expect(page.locator("#scene-template")).to_be_visible()
+
             page.locator("#scene-template input").click()
             page.locator("#scene-template li", has_text="絵コンテ／次のコマ").first.click()
             page.get_by_role("button", name="自然文プロンプト", exact=True).click()

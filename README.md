@@ -121,6 +121,8 @@ Launch the local workbench:
 uv run danbooru-prompt-web
 ```
 
+`やりたいこと` at the top of the page is the first thing to set, and it decides what the rest of the page shows: every input the chosen action cannot reach is hidden, so a setting that would be silently ignored is never offered. `おまかせ` keeps the original behaviour - the router reads the instruction and picks - and shows only what the router can actually reach, which is why the natural-language template and its settings appear only under `自然文プロンプト`. The run button changes with it: one action per task, plus `停止`.
+
 Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
 
 Those two pulls are the light setup and are enough to use every feature. Swapping in the uncensored vision model is covered in [Running the vision steps](#running-the-vision-steps).
@@ -139,11 +141,11 @@ The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes 
 
 An image with no instruction is otherwise routed to plain tag extraction, so the main controls also carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and fills all four boxes with panels at the selected change amount.
 
-The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable, and the action selector can override automatic routing. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
+The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
 
 `VLMで画像を説明する` under the image workspace is on by default, so pull a vision model with `ollama pull qwen3-vl:8b` or change the model in the advanced settings. It also drives the pose, gaze, held-object, and spatial analysis used by image edits and next-panel requests. A vision model that is missing or failing never blocks prompt generation: the description is skipped and the reason appears in the status line under the prompt boxes. When a loaded model stops answering, press `VLMを復旧` beside the switch: it drops the cached description, unloads the model with `keep_alive: 0`, and loads a fresh instance, reporting the exact `ollama pull` or `ollama serve` command when that is the real problem. The advanced settings provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
 
-`操作種別 → タグをVLMで確認` shows the image and the inferred tags to the vision model and asks
+`やりたいこと → タグをVLMで確認` shows the image and the inferred tags to the vision model and asks
 which of them are wrong and which known tags are missing. The tagger scores each tag on its own,
 so it reports plausible neighbours it could not rule out and drops whatever fell under the
 threshold; a model that can see the picture is the thing that judges the list. It never writes
@@ -180,7 +182,7 @@ ollama cp hf.co/Jommarn/UNSEEN_Gemma_4_26B_NSFW-GGUF:Q4_K_M unseen-gemma4:26b
 Then, with an image loaded:
 
 - **Fill the gaps in the tag list.** Run once with no instruction to get tags, then pick
-  `操作種別 → タグをVLMで確認`. On the sample portrait this added `sketch`, `lineart`, and
+  `やりたいこと → タグをVLMで確認`. On the sample portrait this added `sketch`, `lineart`, and
   `fantasy`, all of which the tagger had dropped, and refused `hand_drawn` and `archer` as not
   being in the dictionary. Correct the tag box by hand first if you want a tag protected - the
   review never removes what you typed.
@@ -231,7 +233,7 @@ the paragraph.
 See [Running the vision steps](#running-the-vision-steps) for which model to pair this with and
 what it invents when it is on.
 
-The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only from the button or the `操作種別` selector.
+The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only by choosing it in `やりたいこと`.
 
 Direct image URLs reject private, loopback, and link-local destinations by default, including redirect targets. Enable `プライベート画像URLを許可` only when intentionally loading an image from a trusted LAN service.
 

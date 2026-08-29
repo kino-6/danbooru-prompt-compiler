@@ -33,6 +33,65 @@ from .web_service import (
 
 
 web_app = typer.Typer(help="Launch the local Danbooru Prompt Workbench web UI.")
+# What the user is trying to do, asked first. Everything the answer cannot reach
+# is hidden, because a control that does nothing for the selected task is worse
+# than a missing one: it invites a setting that will be silently ignored.
+TASK_CHOICES: tuple[tuple[str, str], ...] = (
+    ("おまかせ（指示から判断）", "auto"),
+    ("画像からタグを抽出", "tag_image"),
+    ("テキストからプロンプト", "compile"),
+    ("既存プロンプトを編集", "edit"),
+    ("次のコマ", "next_panel"),
+    ("自然文プロンプト", "scene_prompt"),
+    ("タグをVLMで確認", "verify_tags"),
+)
+# Group names per task. A name absent here is hidden for that task; the image
+# workspace, the results, and the advanced settings are never toggled.
+TASK_FIELDS: dict[str, frozenset[str]] = {
+    "auto": frozenset(
+        {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
+         "variants", "run", "next_panel"}
+    ),
+    # Tagging is pure ONNX: no instruction to give, no model to describe with.
+    "tag_image": frozenset({"run"}),
+    "compile": frozenset({"instruction", "follow_up", "variants", "run"}),
+    "edit": frozenset(
+        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
+    ),
+    "next_panel": frozenset(
+        {"vision", "instruction", "panel_change", "variants", "next_panel"}
+    ),
+    "scene_prompt": frozenset(
+        {"vision", "instruction", "base_prompt", "variants", "scene_template",
+         "scene_settings", "scene_prompt"}
+    ),
+    # The review reads the description as context but takes no instruction, and
+    # it answers with one list rather than a number of variants.
+    "verify_tags": frozenset({"vision", "run"}),
+}
+# The order the visibility updates are returned in, so the wiring and the
+# outputs list cannot drift apart.
+TASK_FIELD_ORDER: tuple[str, ...] = (
+    "vision",
+    "instruction",
+    "base_prompt",
+    "follow_up",
+    "panel_change",
+    "variants",
+    "scene_template",
+    "scene_settings",
+    "run",
+    "next_panel",
+    "scene_prompt",
+)
+
+
+def task_field_visibility(task: str) -> list[bool]:
+    """Which groups the chosen task shows, in `TASK_FIELD_ORDER`."""
+    shown = TASK_FIELDS.get(task, TASK_FIELDS["auto"])
+    return [name in shown for name in TASK_FIELD_ORDER]
+
+
 PROGRESS_LABELS = {
     "routing": "指示を解釈しています",
     "tagging": "画像タグを推測しています",
@@ -389,14 +448,72 @@ def build_app(*, service: WebPromptService | None = None):
             "# Danbooru Prompt Workbench\n"
             "画像を置いて日本語で指示するだけで、Danbooru形式のプロンプトを生成します。"
         )
+        task = _build_task_selector(gr)
         with gr.Row():
             image = _build_image_column(gr)
             controls = _build_instruction_column(gr)
         settings = _build_advanced_settings(gr)
         results = _build_result_section(gr)
 
+        # A field name can own more than one component - a button and the hint
+        # that explains it have to appear and disappear together.
+        task_components = {
+            "vision": [image.vision_box],
+            "instruction": [controls.instruction],
+            "base_prompt": [controls.base_prompt_box],
+            "follow_up": [controls.generate_next_panel],
+            "panel_change": [controls.next_panel_change],
+            "variants": [controls.variants_box],
+            "scene_template": [controls.scene_template],
+            "scene_settings": [settings.scene_settings_box],
+            "run": [controls.run_button],
+            "next_panel": [controls.next_panel_button, controls.next_panel_hint],
+            "scene_prompt": [controls.scene_prompt_button],
+        }
+        assert tuple(task_components) == TASK_FIELD_ORDER
+
+        # These two sit beside 実行 under おまかせ, but stand alone under their own
+        # task, and the only action on the page should not look like a secondary one.
+        promotable = {
+            "next_panel": controls.next_panel_button,
+            "scene_prompt": controls.scene_prompt_button,
+        }
+
+        def show_task_fields(selected: str):
+            shown = dict(zip(TASK_FIELD_ORDER, task_field_visibility(selected)))
+            updates = []
+            for name in TASK_FIELD_ORDER:
+                for component in task_components[name]:
+                    if promotable.get(name) is component:
+                        updates.append(
+                            gr.update(
+                                visible=shown[name],
+                                variant="secondary" if shown["run"] else "primary",
+                            )
+                        )
+                    else:
+                        updates.append(gr.update(visible=shown[name]))
+            return updates
+
+        task.action_override.change(
+            show_task_fields,
+            inputs=task.action_override,
+            outputs=[
+                component
+                for name in TASK_FIELD_ORDER
+                for component in task_components[name]
+            ],
+            queue=False,
+        )
+
         inputs = [
-            *_run_inputs(image=image, controls=controls, settings=settings, results=results),
+            *_run_inputs(
+                task=task,
+                image=image,
+                controls=controls,
+                settings=settings,
+                results=results,
+            ),
             results.history_state,
         ]
         outputs = [
@@ -553,7 +670,7 @@ def build_app(*, service: WebPromptService | None = None):
     return demo
 
 
-def _run_inputs(*, image, controls, settings, results) -> list:
+def _run_inputs(*, task, image, controls, settings, results) -> list:
     """One component per WebRunRequest field, ordered by that single definition."""
     run_components = {
         "image_path": image.active_file,
@@ -574,7 +691,7 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "scene_sees_image": settings.scene_sees_image,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
-        "action_override": settings.action_override,
+        "action_override": task.action_override,
         "use_vision": image.use_vision,
         "vision_model": settings.vision_model,
         "allow_private_image_urls": settings.allow_private_image_urls,
@@ -585,6 +702,18 @@ def _run_inputs(*, image, controls, settings, results) -> list:
     if missing:  # pragma: no cover - guards a wiring mistake at build time
         raise RuntimeError(f"Web run fields without a component: {sorted(missing)}")
     return [run_components[name] for name in WEB_RUN_FIELDS]
+
+
+def _build_task_selector(gr) -> SimpleNamespace:
+    """The first question, and the one that decides what the rest of the page shows."""
+    action_override = gr.Radio(
+        choices=list(TASK_CHOICES),
+        value="auto",
+        label="やりたいこと",
+        elem_id="task-selector",
+        info="選んだ内容に関係する入力だけを表示します。",
+    )
+    return SimpleNamespace(action_override=action_override)
 
 
 def _build_image_column(gr) -> SimpleNamespace:
@@ -633,34 +762,36 @@ def _build_image_column(gr) -> SimpleNamespace:
             gr.Markdown(
                 "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
             )
-        use_vision = gr.Checkbox(
-            value=True,
-            label="VLMで画像を説明する",
-            info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
-        )
-        with gr.Row():
-            recover_vision_button = gr.Button(
-                "VLMを復旧",
-                elem_id="recover-vision-button",
-                size="sm",
+        with gr.Group() as vision_box:
+            use_vision = gr.Checkbox(
+                value=True,
+                label="VLMで画像を説明する",
+                info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
             )
-        recover_vision_status = gr.Markdown(
-            "VLMが応答しなくなったら押してください。モデルを解放して読み込み直します。"
-        )
-        description = gr.Textbox(
-            label="画像の説明（VLM）",
-            lines=4,
-            buttons=["copy"],
-            interactive=True,
-            elem_id="image-description-editor",
-            placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
-            info=(
-                "タグが少ないときの補足に使えます。"
-                "直接書き換えるとVLMを再実行せず、その内容をそのまま使います。"
-            ),
-        )
+            with gr.Row():
+                recover_vision_button = gr.Button(
+                    "VLMを復旧",
+                    elem_id="recover-vision-button",
+                    size="sm",
+                )
+            recover_vision_status = gr.Markdown(
+                "VLMが応答しなくなったら押してください。モデルを解放して読み込み直します。"
+            )
+            description = gr.Textbox(
+                label="画像の説明（VLM）",
+                lines=4,
+                buttons=["copy"],
+                interactive=True,
+                elem_id="image-description-editor",
+                placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
+                info=(
+                    "タグが少ないときの補足に使えます。"
+                    "直接書き換えるとVLMを再実行せず、その内容をそのまま使います。"
+                ),
+            )
     return SimpleNamespace(
         workspace=workspace,
+        vision_box=vision_box,
         active_file=active_file,
         dropped_url=dropped_url,
         dropped_url_button=dropped_url_button,
@@ -681,7 +812,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
             lines=5,
         )
-        with gr.Accordion("既存プロンプトから編集（任意）", open=False):
+        with gr.Accordion("既存プロンプトから編集（任意）", open=False) as base_prompt_box:
             base_prompt = gr.Textbox(
                 label="既存プロンプト",
                 placeholder="画像の代わりに既存タグを編集するときに入力",
@@ -705,7 +836,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
                 "0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。"
             ),
         )
-        with gr.Row():
+        with gr.Row() as variants_box:
             variants = gr.Radio(
                 choices=[1, 2, 3, 4],
                 value=4,
@@ -717,6 +848,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             value=DEFAULT_SCENE_TEMPLATE,
             label="自然文プロンプトのテンプレート",
             elem_id="scene-template",
+            visible=False,
             info="「自然文プロンプト」で使う骨組みです。templates/ にYAMLを足せば増やせます。",
         )
         with gr.Row():
@@ -728,22 +860,26 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             scene_prompt_button = gr.Button(
                 "自然文プロンプト",
                 elem_id="scene-prompt-button",
+                visible=False,
             )
             cancel_button = gr.Button("停止", variant="stop")
-        gr.Markdown(
+        next_panel_hint = gr.Markdown(
             "「次のコマ」ボタンは指示がなくても押せます。画像だけを置いて押すと、"
             "4枠すべてに一瞬後の場面を提案します。"
         )
     return SimpleNamespace(
         instruction=instruction,
         base_prompt=base_prompt,
+        base_prompt_box=base_prompt_box,
         variants=variants,
+        variants_box=variants_box,
         generate_next_panel=generate_next_panel,
         next_panel_change=next_panel_change,
         scene_template=scene_template,
         scene_prompt_button=scene_prompt_button,
         run_button=run_button,
         next_panel_button=next_panel_button,
+        next_panel_hint=next_panel_hint,
         cancel_button=cancel_button,
     )
 
@@ -774,6 +910,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                     "既定のモデルが説明を拒否・省略する画像では無検閲のものを選んでください。"
                 ),
             )
+        with gr.Group(visible=False) as scene_settings_box:
             scene_model = gr.Textbox(
                 value=DEFAULT_SCENE_MODEL,
                 label="自然文プロンプト用モデル",
@@ -793,22 +930,9 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                     "タグは事実として併せて渡すので特徴は落ちません。"
                 ),
             )
-            allow_private_image_urls = gr.Checkbox(
-                value=False,
-                label="プライベート画像URLを許可",
-            )
-        action_override = gr.Dropdown(
-            choices=[
-                ("自動判定", "auto"),
-                ("画像タグ抽出", "tag_image"),
-                ("新規プロンプト", "compile"),
-                ("既存プロンプト編集", "edit"),
-                ("次のコマ", "next_panel"),
-                ("自然文プロンプト", "scene_prompt"),
-                ("タグをVLMで確認", "verify_tags"),
-            ],
-            value="auto",
-            label="操作種別",
+        allow_private_image_urls = gr.Checkbox(
+            value=False,
+            label="プライベート画像URLを許可",
         )
         diagnostic_button = gr.Button("Ollama接続確認")
         diagnostic_output = gr.Markdown(label="Ollama診断")
@@ -852,8 +976,8 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         vision_model=vision_model,
         scene_model=scene_model,
         scene_sees_image=scene_sees_image,
+        scene_settings_box=scene_settings_box,
         allow_private_image_urls=allow_private_image_urls,
-        action_override=action_override,
         diagnostic_button=diagnostic_button,
         diagnostic_output=diagnostic_output,
         general_threshold=general_threshold,
