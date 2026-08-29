@@ -25,6 +25,12 @@ from .image_tagger import (
 )
 from .llm import LLMClient, OllamaClient
 from .models import CompileMode, CompileRequest, InputType, LLMRequest
+from .next_panel import (
+    build_next_panel_request,
+    described_moment,
+    panel_moved,
+    protected_tags,
+)
 from .normalizer import normalize_tags, parse_tag_text
 from .scene_prompt import (
     SceneTemplate,
@@ -151,6 +157,8 @@ class NextPanelProfile:
     preserve: list[str]
     temperature: float
     scene_instruction: str
+    # How far the vision model may move the panel, in its own request language.
+    movement: str
 
 
 # Ordered by upper bound of the 0.0-1.0 change slider. Preserving fewer aspects
@@ -166,6 +174,11 @@ NEXT_PANEL_PROFILES: tuple[tuple[float, NextPanelProfile], ...] = (
                 "ほんの少しだけ動いた直後の場面にする。"
                 "構図と背景は保ち、視線や手足の位置など小さな変化にとどめる。"
             ),
+            movement=(
+                "barely at all - the framing and the background hold, and the "
+                "action advances by a fraction: a bow drawn a little further, a "
+                "hand moved closer to what it is reaching for"
+            ),
         ),
     ),
     (
@@ -177,6 +190,10 @@ NEXT_PANEL_PROFILES: tuple[tuple[float, NextPanelProfile], ...] = (
                 "はっきりと動作や向きが変わった直後の場面にする。"
                 "同じ場所のまま、姿勢・視線・表情のいずれかを明確に変える。"
             ),
+            movement=(
+                "clearly - the character stays where they are, but the pose, the "
+                "gaze or the expression plainly changes"
+            ),
         ),
     ),
     (
@@ -187,6 +204,10 @@ NEXT_PANEL_PROFILES: tuple[tuple[float, NextPanelProfile], ...] = (
             scene_instruction=(
                 "場面が大きく動いた次のコマにする。"
                 "人物の同一性だけ保ち、姿勢・構図・カメラ位置・背景を思い切って変えてよい。"
+            ),
+            movement=(
+                "freely - only the character stays the same, and the pose, the "
+                "framing, the camera and the background may all move"
             ),
         ),
     ),
@@ -428,29 +449,60 @@ class WebPromptService:
             else ""
         )
 
+        # A next panel is a question about time, and a tag list carries no time.
+        # The model that can see the picture answers it; the tag compiler is the
+        # fallback for when it cannot.
+        panel_note = ""
+        panel_variants: list[list[str]] | None = None
+        if routed.plan.action == WebAction.next_panel and image_path and inferred_names:
+            _report_progress(on_progress, "vision", 0.6)
+            try:
+                panel_variants, panel_note = self._propose_next_panels(
+                    image_path,
+                    tags=inferred_names,
+                    image_description=image_description,
+                    change=next_panel_change,
+                    variants=variants,
+                    ollama_url=ollama_url,
+                    vision_model=vision_model,
+                )
+            except Exception as exc:
+                panel_variants = None
+                panel_note = (
+                    f"次のコマをVLMで提案できなかったため、タグからの生成に戻しました: "
+                    f"{vision_model}: {exc}"
+                )
+
         _report_progress(on_progress, "compilation", 0.7)
-        compiler = self.compiler_factory(ollama_url, compiler_model)
-        compile_request = _build_compile_request(
-            routed.plan,
-            instruction=clean_instruction,
-            base_prompt=clean_base_prompt,
-            inferred_tags=inferred_names,
-            vision_observation=vision_observation,
-            exclusion_rules=exclusion_rules,
-            next_panel_change=next_panel_change,
-        )
-        compile_result = compiler.compile(compile_request)
-        output_variants = compile_result.variants
-        if routed.plan.action == WebAction.next_panel and image_result:
-            output_variants = _stabilize_next_panel_variants(
-                output_variants,
-                preserve=next_panel_profile(next_panel_change).preserve,
-                image_result=image_result,
-                known_tags=compiler.tag_dictionary,
-                required_tags=_instruction_tag_hints(
-                    routed.plan.edit_instruction or clean_instruction
-                ),
+        compiled_exclusions: list[str] = []
+        unknown_tags: list[str] = []
+        if panel_variants is not None:
+            output_variants = panel_variants
+        else:
+            compiler = self.compiler_factory(ollama_url, compiler_model)
+            compile_request = _build_compile_request(
+                routed.plan,
+                instruction=clean_instruction,
+                base_prompt=clean_base_prompt,
+                inferred_tags=inferred_names,
+                vision_observation=vision_observation,
+                exclusion_rules=exclusion_rules,
+                next_panel_change=next_panel_change,
             )
+            compile_result = compiler.compile(compile_request)
+            output_variants = compile_result.variants
+            compiled_exclusions = compile_result.excluded_tags
+            unknown_tags = compile_result.unknown_tags
+            if routed.plan.action == WebAction.next_panel and image_result:
+                output_variants = _stabilize_next_panel_variants(
+                    output_variants,
+                    preserve=next_panel_profile(next_panel_change).preserve,
+                    image_result=image_result,
+                    known_tags=compiler.tag_dictionary,
+                    required_tags=_instruction_tag_hints(
+                        routed.plan.edit_instruction or clean_instruction
+                    ),
+                )
         # The compiler already dropped excluded tags; this catches tags that
         # next-panel stabilization re-injects from manually edited image tags.
         output_variants, restabilized_exclusions = _exclude_variant_tags(
@@ -458,7 +510,7 @@ class WebPromptService:
             exclusion_rules,
         )
         excluded_prompt_tags = list(
-            dict.fromkeys([*compile_result.excluded_tags, *restabilized_exclusions])
+            dict.fromkeys([*compiled_exclusions, *restabilized_exclusions])
         )
         candidates = [
             format_clipboard_text(tags, OutputFormat.grouped) for tags in output_variants
@@ -476,8 +528,10 @@ class WebPromptService:
             description_cache_hit=description_cache_hit,
             description_error=description_error,
         )
-        if compile_result.unknown_tags:
-            status += f"\n\nUnknown tags: {', '.join(compile_result.unknown_tags)}"
+        if panel_note:
+            status += f"\n\n{panel_note}"
+        if unknown_tags:
+            status += f"\n\nUnknown tags: {', '.join(unknown_tags)}"
         result = WebRunResult(
             action_plan=_plan_dict(routed),
             inferred_tags=inferred_text,
@@ -538,6 +592,64 @@ class WebPromptService:
             render_scene_prompt(output, template, avoid_terms=avoid_terms)
             for output in response.outputs
         ]
+
+    def _propose_next_panels(
+        self,
+        image_path: str,
+        *,
+        tags: list[str],
+        image_description: str,
+        change: float,
+        variants: int,
+        ollama_url: str,
+        vision_model: str,
+    ) -> tuple[list[list[str]], str]:
+        """Panels for the moment after this one, and what to say about them."""
+        profile = next_panel_profile(change)
+        protected = protected_tags(tags, profile.preserve)
+        request = build_next_panel_request(
+            tags,
+            description=image_description,
+            movement=profile.movement,
+            protected=protected,
+        )
+        client = self.vision_factory(ollama_url, vision_model)
+        response = client.generate(
+            LLMRequest(
+                prompt=request,
+                variants=variants,
+                image_paths=[image_path],
+                temperature=profile.temperature,
+            )
+        )
+        known = self.known_tags()
+        panels: list[list[str]] = []
+        moments: list[str] = []
+        for output in response.outputs:
+            review = apply_tag_review(
+                output, tags=tags, known_tags=known, protected=protected
+            )
+            panels.append(review.tags)
+            moment = described_moment(output)
+            if moment and moment not in moments:
+                moments.append(moment)
+        if not panels:
+            raise ValueError("次のコマの提案が空でした。")
+        # A panel that matches the one it came from is not a next panel. Saying
+        # so beats handing back a copy the user has to notice for themselves.
+        still = sum(1 for panel in panels if not panel_moved(tags, panel))
+        note = (
+            f"次のコマ: {len(panels) - still}件が動き、{still}件は現在のコマと"
+            "姿勢・構図が変わりませんでした。変化量を上げるか、指示で動きを指定してください。"
+            if still
+            else f"次のコマ: {len(panels)}件すべてが現在のコマから動いています。"
+        )
+        if moments:
+            # The sentence the model wrote before its tags says what the panel is
+            # meant to be, which a tag list leaves the reader to infer.
+            listed = "\n".join(f"- {moment}" for moment in moments)
+            note = f"{note}\n\n{listed}"
+        return panels, note
 
     def known_tags(self) -> set[str]:
         """The Danbooru dictionary, read once and only when something asks."""

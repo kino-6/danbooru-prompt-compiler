@@ -131,7 +131,19 @@ Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an
 
 Those two pulls are the light setup and are enough to use every feature. Swapping in the uncensored vision model is covered in [Running the vision steps](#running-the-vision-steps).
 
-The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes the current image, then the text model proposes the next prompt while preserving the aspects the change slider holds fixed.
+`next_panel` asks the vision model, because a next panel is a question about time and a tag list carries no time. Given the picture it answers in three lines - one sentence saying what the character does in the next instant, then the current tags that stop being true and the Danbooru tags that start being true. The sentence comes first deliberately: asked for tags alone the model returns the timid answer, and asked to say what happens first it commits to an action and the tags follow.
+
+Everything it proposes is bounded the same way the tag review is: additions must exist in `data/tags.json`, removals must name a tag already on the list, and the aspects the change slider holds fixed cannot be removed at all. The sentence it wrote appears in the status line, since it says what the panel is meant to be and the tag list only implies it.
+
+A proposal whose pose and framing match the panel it came from is not a next panel. The status line says how many came back unmoved rather than handing them over quietly. If the vision model is missing or fails, the run falls back to the old tag-only path with the reason in the status line.
+
+On the sample portrait - an archer with an arrow nocked - the change slider now moves the panel rather than trimming it:
+
+| 変化量 | Proposed moment | Tags added |
+| --- | --- | --- |
+| `0.2` | pulls the bowstring further back towards her face | `drawing_bow` |
+| `0.5` | draws the arrow back towards her cheek | `drawing_bow`, `aiming` |
+| `0.9` | reaches back to grab an arrow from the quiver | `reaching`, `hand_near_head` |
 
 `次のコマも生成する（出力2〜4）` is on by default, so every run leaves the current result in prompt box 1 and fills boxes 2-4 with proposals for the moment just after it. The follow-up continues the tags and description the first run already resolved, and a failure in it leaves the box 1 result intact with the reason in the status line. Turn it off to get plain `出力数` variants across all four boxes.
 
@@ -450,6 +462,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
+- `next_panel.py`: the moment after the current panel, bounded by the dictionary.
 - `tag_review.py`: dictionary-bounded review of inferred tags against the image.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.

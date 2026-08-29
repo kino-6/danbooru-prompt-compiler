@@ -939,3 +939,102 @@ def test_a_failing_vision_model_leaves_the_reviewed_tags_intact() -> None:
     assert result.inferred_tags == "1girl, rain, power_(chainsaw_man)"
     assert "タグ確認に失敗したため、タグはそのままです" in result.status
     assert "model missing" in result.status
+
+
+class PanelTagger:
+    def predict(self, _image_path: Path, **_options) -> ImageTagResult:
+        return ImageTagResult(
+            tags=[
+                PredictedTag("1girl", 0.99, GENERAL_CATEGORY),
+                PredictedTag("long_hair", 0.95, GENERAL_CATEGORY),
+                PredictedTag("standing", 0.9, GENERAL_CATEGORY),
+                PredictedTag("looking_at_viewer", 0.88, GENERAL_CATEGORY),
+                PredictedTag("holding_bow_(weapon)", 0.85, GENERAL_CATEGORY),
+            ],
+            rating=None,
+        )
+
+
+PANEL_DICTIONARY = {
+    "1girl", "long_hair", "standing", "looking_at_viewer",
+    "holding_bow_(weapon)", "drawing_bow", "aiming", "looking_away",
+}
+
+
+def _panel_service(vision_client, **kwargs) -> WebPromptService:
+    return WebPromptService(
+        tagger=PanelTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.next_panel)
+        ),
+        vision_factory=lambda _url, _model: vision_client,
+        compiler_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("the vision path must not fall back to the compiler")
+        ),
+        known_tags=PANEL_DICTIONARY,
+        **kwargs,
+    )
+
+
+def _panel_options(**overrides) -> dict:
+    return {
+        "image_path": "sample.png",
+        "instruction": "",
+        "base_prompt": "",
+        "use_vision": False,
+        "variants": 1,
+        **overrides,
+    }
+
+
+def test_the_next_panel_comes_from_the_model_that_can_see_the_image() -> None:
+    vision_client = ReviewingVisionClient(
+        "Next: she pulls the bowstring back towards her face.\n"
+        "Remove: holding_bow_(weapon)\n"
+        "Add: drawing_bow, aiming"
+    )
+    service = _panel_service(vision_client)
+
+    result = service.run(**_panel_options(action_override="next_panel"))
+
+    assert vision_client.last_request.image_paths == ["sample.png"]
+    assert "drawing_bow" in result.output and "aiming" in result.output
+    assert "holding_bow_(weapon)" not in result.output
+    # The identity of the character survives whatever the panel does.
+    assert "1girl" in result.output and "long_hair" in result.output
+    assert "すべてが現在のコマから動いています" in result.status
+    # The sentence explains the panel that the tag list only implies.
+    assert "she pulls the bowstring back towards her face." in result.status
+
+
+def test_a_panel_that_did_not_move_is_reported_rather_than_returned_quietly() -> None:
+    # The answer only restyles: nothing the character does has changed.
+    vision_client = ReviewingVisionClient("Remove: none\nAdd: none")
+    service = _panel_service(vision_client)
+
+    result = service.run(**_panel_options(action_override="next_panel"))
+
+    assert "1件は現在のコマと姿勢・構図が変わりませんでした" in result.status
+    assert "変化量を上げるか" in result.status
+
+
+def test_a_failing_vision_model_falls_back_to_the_tag_compiler() -> None:
+    class BrokenVisionClient:
+        def generate(self, _request):
+            raise RuntimeError("model missing")
+
+    service = WebPromptService(
+        tagger=PanelTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.next_panel)
+        ),
+        vision_factory=lambda _url, _model: BrokenVisionClient(),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        known_tags=PANEL_DICTIONARY,
+    )
+
+    result = service.run(**_panel_options(action_override="next_panel"))
+
+    assert "タグからの生成に戻しました" in result.status
+    assert "model missing" in result.status
+    assert result.output
