@@ -632,7 +632,9 @@ def test_prompt_candidates_get_independent_copyable_boxes() -> None:
         props = components[f"出力プロンプト {index}"]["props"]
         assert "copy" in props["buttons"]
         assert props["interactive"] is True
-        assert props["visible"] is True
+        # Empty boxes are the tallest thing on an untouched page, so a box
+        # arrives with the run that fills it rather than waiting on screen.
+        assert props["visible"] is False
         assert props["elem_id"] == f"prompt-output-{index}"
 
 

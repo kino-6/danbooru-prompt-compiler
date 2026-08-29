@@ -63,7 +63,9 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             expect(image_description).to_have_value("")
             expect(base_prompt).to_have_value("")
             for index in range(1, 5):
-                expect(page.locator(f"#prompt-output-{index} textarea")).to_have_value("")
+                # Clearing the page takes the boxes away rather than leaving
+                # four empty ones behind.
+                expect(page.locator(f"#prompt-output-{index}")).to_be_hidden()
 
             page.get_by_role("button", name="実行", exact=True).click()
             expect(inferred_tags).to_have_value("1girl, solo")
@@ -100,10 +102,8 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
                 expect(output).to_have_value(prompt)
                 expect(container.get_by_role("button", name="Copy")).to_be_visible()
 
-            fourth = page.locator("#prompt-output-4 textarea")
-            expect(fourth).to_be_visible()
-            expect(fourth).to_be_editable()
-            expect(fourth).to_have_value("")
+            # Three variants leave three boxes; the fourth never appears.
+            expect(page.locator("#prompt-output-4")).to_be_hidden()
             browser.close()
 
 

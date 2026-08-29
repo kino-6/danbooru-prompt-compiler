@@ -50,24 +50,20 @@ TASK_CHOICES: tuple[tuple[str, str], ...] = (
 TASK_FIELDS: dict[str, frozenset[str]] = {
     "auto": frozenset(
         {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
-         "variants", "run", "next_panel", "outputs_extra"}
+         "variants", "run", "next_panel"}
     ),
     # Tagging is pure ONNX: no instruction to give, no model to describe with.
     "tag_image": frozenset({"run"}),
-    "compile": frozenset(
-        {"instruction", "follow_up", "variants", "run", "outputs_extra"}
-    ),
+    "compile": frozenset({"instruction", "follow_up", "variants", "run"}),
     "edit": frozenset(
-        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run",
-         "outputs_extra"}
+        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
     ),
     "next_panel": frozenset(
-        {"vision", "instruction", "panel_change", "variants", "next_panel",
-         "outputs_extra"}
+        {"vision", "instruction", "panel_change", "variants", "next_panel"}
     ),
     "scene_prompt": frozenset(
         {"vision", "instruction", "base_prompt", "variants", "scene_template",
-         "scene_settings", "scene_prompt", "outputs_extra"}
+         "scene_settings", "scene_prompt"}
     ),
     # The review reads the description as context but takes no instruction, and
     # it answers with one list rather than a number of variants.
@@ -87,7 +83,6 @@ TASK_FIELD_ORDER: tuple[str, ...] = (
     "run",
     "next_panel",
     "scene_prompt",
-    "outputs_extra",
 )
 
 
@@ -398,6 +393,15 @@ def _merge_candidates(
     return [*result.candidates[:1], *follow_up.candidates[:NEXT_PANEL_SLOTS]]
 
 
+def _prompt_updates(gr, prompts: list[str]):
+    """Show a prompt box only once it has something in it.
+
+    Four empty boxes are the tallest thing on an untouched page and they teach
+    nothing; a run that answers with one list should leave one box behind.
+    """
+    return [gr.update(value=value, visible=bool(value)) for value in prompts]
+
+
 def build_app(*, service: WebPromptService | None = None):
     try:
         import gradio as gr
@@ -426,7 +430,7 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.action_plan,
             outputs.inferred_tags,
             outputs.image_description,
-            *outputs.prompts,
+            *_prompt_updates(gr, outputs.prompts),
             outputs.status,
             gr.Radio(
                 choices=outputs.candidates,
@@ -449,10 +453,7 @@ def build_app(*, service: WebPromptService | None = None):
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
-        gr.Markdown(
-            "# Danbooru Prompt Workbench\n"
-            "画像を置いて日本語で指示するだけで、Danbooru形式のプロンプトを生成します。"
-        )
+        gr.Markdown("### Danbooru Prompt Workbench")
         task = _build_task_selector(gr)
         with gr.Row():
             image = _build_image_column(gr)
@@ -474,7 +475,6 @@ def build_app(*, service: WebPromptService | None = None):
             "run": [controls.run_button],
             "next_panel": [controls.next_panel_button],
             "scene_prompt": [controls.scene_prompt_button],
-            "outputs_extra": results.extra_prompts,
         }
         assert tuple(task_components) == TASK_FIELD_ORDER
 
@@ -553,7 +553,7 @@ def build_app(*, service: WebPromptService | None = None):
                 "",
                 "",
                 "",
-                *blank_prompt_boxes(),
+                *_prompt_updates(gr, blank_prompt_boxes()),
                 gr.Radio(choices=[], value=None),
                 {},
                 status,
@@ -717,7 +717,6 @@ def _build_task_selector(gr) -> SimpleNamespace:
         value="auto",
         label="やりたいこと",
         elem_id="task-selector",
-        info="関係する入力だけを表示します。",
     )
     return SimpleNamespace(action_override=action_override)
 
@@ -730,7 +729,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             sources=["upload"],
             label="画像",
             placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
-            height=320,
+            height=240,
             interactive=True,
             elem_id="image-workspace",
             buttons=["fullscreen"],
@@ -1001,6 +1000,7 @@ def _build_result_section(gr) -> SimpleNamespace:
             lines=4,
             buttons=["copy"],
             interactive=True,
+            visible=False,
             elem_id=f"prompt-output-{number}",
         )
 
@@ -1009,9 +1009,8 @@ def _build_result_section(gr) -> SimpleNamespace:
     prompts = []
     with gr.Row():
         prompts.append(prompt_box(1))
-        second_prompt = prompt_box(2)
-        prompts.append(second_prompt)
-    with gr.Row() as extra_prompt_row:
+        prompts.append(prompt_box(2))
+    with gr.Row():
         prompts.append(prompt_box(3))
         prompts.append(prompt_box(4))
     # Errors land here, so it must not be hidden inside a collapsed section.
@@ -1029,7 +1028,6 @@ def _build_result_section(gr) -> SimpleNamespace:
     return SimpleNamespace(
         inferred_tags=inferred_tags,
         prompts=prompts,
-        extra_prompts=[second_prompt, extra_prompt_row],
         history_state=history_state,
         candidate_selector=candidate_selector,
         adopt_button=adopt_button,
