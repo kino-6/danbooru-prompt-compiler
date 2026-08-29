@@ -453,13 +453,14 @@ def build_app(*, service: WebPromptService | None = None):
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
-        gr.Markdown("### Danbooru Prompt Workbench")
         task = _build_task_selector(gr)
         with gr.Row():
             image = _build_image_column(gr)
             controls = _build_instruction_column(gr)
-        settings = _build_advanced_settings(gr)
         results = _build_result_section(gr)
+        with gr.Row():
+            settings = _build_advanced_settings(gr)
+            results = SimpleNamespace(**vars(results), **vars(_build_run_details(gr)))
 
         # A field name can own more than one component - a button and the hint
         # that explains it have to appear and disappear together.
@@ -585,18 +586,18 @@ def build_app(*, service: WebPromptService | None = None):
         image.workspace.input(
             handle_image_upload,
             inputs=image.workspace,
-            outputs=[image.active_file, image.url_input, *cleared_outputs],
+            outputs=[image.active_file, settings.url_input, *cleared_outputs],
             queue=False,
         )
         image_url_outputs = [
             image.workspace,
             image.active_file,
-            image.url_input,
+            settings.url_input,
             *cleared_outputs,
         ]
-        image.url_button.click(
+        settings.url_button.click(
             handle_image_url,
-            inputs=[image.url_input, settings.allow_private_image_urls],
+            inputs=[settings.url_input, settings.allow_private_image_urls],
             outputs=image_url_outputs,
             queue=False,
         )
@@ -680,7 +681,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
     """One component per WebRunRequest field, ordered by that single definition."""
     run_components = {
         "image_path": image.active_file,
-        "image_url": image.url_input,
+        "image_url": settings.url_input,
         "instruction": controls.instruction,
         "base_prompt": controls.base_prompt,
         "router_model": settings.router_model,
@@ -729,7 +730,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             sources=["upload"],
             label="画像",
             placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
-            height=240,
+            height=200,
             interactive=True,
             elem_id="image-workspace",
             buttons=["fullscreen"],
@@ -750,41 +751,28 @@ def _build_image_column(gr) -> SimpleNamespace:
             elem_id="dropped-image-url-button",
             elem_classes="url-drop-bridge",
         )
-        with gr.Accordion(
-            "URLから読み込む（補助）",
-            open=False,
-            elem_id="image-url-accordion",
-        ):
-            url_input = gr.Textbox(
-                label="画像URL",
-                placeholder="https://example.com/image.png",
-                elem_id="image-url-input",
-            )
-            url_button = gr.Button(
-                "URLを読み込む",
-                elem_id="image-url-load-button",
-            )
-            gr.Markdown(
-                "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
-            )
         with gr.Group() as vision_box:
-            use_vision = gr.Checkbox(
-                value=True,
-                label="VLMで画像を説明する",
-                info="ポーズや位置関係の解析にも使います。",
-            )
+            # The switch and its recovery button share one line: the button is
+            # pressed rarely, and a row of its own cost 40px on every page.
             with gr.Row():
+                use_vision = gr.Checkbox(
+                    value=True,
+                    label="VLMで画像を説明する",
+                    info="ポーズや位置関係の解析にも使います。",
+                    scale=3,
+                )
                 recover_vision_button = gr.Button(
                     "VLMを復旧",
                     elem_id="recover-vision-button",
                     size="sm",
+                    scale=1,
                 )
             # The hint only matters once the button has been pressed, so it
             # takes no room on the page before then.
             recover_vision_status = gr.Markdown()
             description = gr.Textbox(
                 label="画像の説明（VLM）",
-                lines=4,
+                lines=2,
                 buttons=["copy"],
                 interactive=True,
                 elem_id="image-description-editor",
@@ -797,8 +785,6 @@ def _build_image_column(gr) -> SimpleNamespace:
         active_file=active_file,
         dropped_url=dropped_url,
         dropped_url_button=dropped_url_button,
-        url_input=url_input,
-        url_button=url_button,
         use_vision=use_vision,
         description=description,
         recover_vision_button=recover_vision_button,
@@ -812,7 +798,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
         instruction = gr.Textbox(
             label="どうしたい？",
             placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
-            lines=3,
+            lines=2,
         )
         with gr.Accordion("既存プロンプトから編集（任意）", open=False) as base_prompt_box:
             base_prompt = gr.Textbox(
@@ -832,14 +818,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             step=0.1,
             label="次のコマの変化量",
             elem_id="next-panel-change",
-            info="0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。",
         )
-        with gr.Row() as variants_box:
-            variants = gr.Radio(
-                choices=[1, 2, 3, 4],
-                value=4,
-                label="出力数",
-            )
         scene_template = gr.Dropdown(
             choices=[(template.label, template.name) for template in load_templates()],
             value=DEFAULT_SCENE_TEMPLATE,
@@ -848,6 +827,17 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             visible=False,
             info="「自然文プロンプト」で使う骨組みです。templates/ にYAMLを足せば増やせます。",
         )
+        with gr.Row() as variants_box:
+            # container=False drops Gradio's label with its padding, so the
+            # label is written beside the pills on the same line instead.
+            gr.Markdown("出力数", container=False, scale=0)
+            variants = gr.Radio(
+                choices=[1, 2, 3, 4],
+                value=4,
+                label="出力数",
+                container=False,
+                scale=4,
+            )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
             next_panel_button = gr.Button(
@@ -926,6 +916,23 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
             value=False,
             label="プライベート画像URLを許可",
         )
+        with gr.Accordion(
+            "URLから読み込む（補助）",
+            open=False,
+            elem_id="image-url-accordion",
+        ):
+            url_input = gr.Textbox(
+                label="画像URL",
+                placeholder="https://example.com/image.png",
+                elem_id="image-url-input",
+            )
+            url_button = gr.Button(
+                "URLを読み込む",
+                elem_id="image-url-load-button",
+            )
+            gr.Markdown(
+                "Webページ上の画像や画像URLは、画像欄へ直接ドロップすることもできます。"
+            )
         diagnostic_button = gr.Button("Ollama接続確認")
         diagnostic_output = gr.Markdown(label="Ollama診断")
         with gr.Row():
@@ -970,6 +977,8 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         scene_sees_image=scene_sees_image,
         scene_settings_box=scene_settings_box,
         allow_private_image_urls=allow_private_image_urls,
+        url_input=url_input,
+        url_button=url_button,
         diagnostic_button=diagnostic_button,
         diagnostic_output=diagnostic_output,
         general_threshold=general_threshold,
@@ -1016,6 +1025,16 @@ def _build_result_section(gr) -> SimpleNamespace:
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
+    return SimpleNamespace(
+        inferred_tags=inferred_tags,
+        prompts=prompts,
+        history_state=history_state,
+        status=status,
+    )
+
+
+def _build_run_details(gr) -> SimpleNamespace:
+    """Candidates, history, and the plan: everything about the run just made."""
     with gr.Accordion("実行の詳細", open=False):
         with gr.Row():
             candidate_selector = gr.Radio(
@@ -1026,14 +1045,10 @@ def _build_result_section(gr) -> SimpleNamespace:
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
         action_plan = gr.JSON(label="実行計画")
     return SimpleNamespace(
-        inferred_tags=inferred_tags,
-        prompts=prompts,
-        history_state=history_state,
         candidate_selector=candidate_selector,
         adopt_button=adopt_button,
         history_output=history_output,
         action_plan=action_plan,
-        status=status,
     )
 
 
