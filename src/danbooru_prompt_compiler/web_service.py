@@ -8,7 +8,7 @@ from typing import Callable, Sequence
 
 from pydantic import BaseModel
 
-from .compiler import PromptCompiler
+from .compiler import TAG_DICT_PATH, PromptCompiler
 from .formatter import (
     OutputFormat,
     SUBJECT_TAGS,
@@ -34,11 +34,17 @@ from .scene_prompt import (
     load_templates,
     render_scene_prompt,
 )
+from .tag_dictionary import load_or_fetch_tag_dictionary
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     exact_exclusion_rules,
     parse_exclusion_rules,
     split_excluded,
+)
+from .tag_review import (
+    TagReview,
+    apply_tag_review,
+    build_tag_review_request,
 )
 from .web_router import ActionPlan, NaturalLanguageRouter, RouteRequest, RoutedPlan, WebAction
 
@@ -216,6 +222,7 @@ class WebPromptService:
         vision_factory: Callable[[str, str], LLMClient] | None = None,
         text_factory: Callable[[str, str], LLMClient] | None = None,
         scene_templates: list[SceneTemplate] | None = None,
+        known_tags: set[str] | None = None,
     ) -> None:
         self.tagger = tagger or ImageTagger()
         self.router_factory = router_factory or _default_router_factory
@@ -226,6 +233,9 @@ class WebPromptService:
         self.vision_factory = vision_factory or _default_vision_factory
         self.text_factory = text_factory or _default_text_factory
         self.scene_templates = scene_templates if scene_templates is not None else load_templates()
+        # Loading the dictionary is the only reason a tag review would need a
+        # compiler, so it is read on its own and only when something asks.
+        self._known_tags = known_tags
 
     def run(
         self,
@@ -346,6 +356,43 @@ class WebPromptService:
                     description_error=description_error,
                 ),
                 candidates=candidates,
+                image_description=image_description,
+            )
+            _report_progress(on_progress, "complete", 1.0)
+            return result
+
+        if routed.plan.action == WebAction.verify_tags:
+            if not image_path:
+                raise ValueError("タグ確認には画像をアップロードしてください。")
+            if not inferred_names:
+                raise ValueError("確認するタグがありません。先にタグを推測してください。")
+            _report_progress(on_progress, "vision", 0.7)
+            review, review_error = self._review_image_tags(
+                image_path,
+                tags=inferred_names,
+                image_description=image_description,
+                # Hand-typed tags are a statement about the image, not a guess
+                # for the model to overrule.
+                protected=normalize_tags(parse_tag_text(clean_edited_tags)),
+                ollama_url=ollama_url,
+                vision_model=vision_model,
+            )
+            reviewed_text = ", ".join(review.tags)
+            status = _status_text(
+                routed,
+                image_result=image_result,
+                image_cache_hit=image_cache_hit,
+                excluded_image_tags=excluded_image_tags,
+                description_cache_hit=description_cache_hit,
+                description_error=description_error,
+            )
+            status += "\n\n" + _review_status(review, review_error, vision_model)
+            result = WebRunResult(
+                action_plan=_plan_dict(routed),
+                inferred_tags=reviewed_text,
+                output=format_variant(review.tags, OutputFormat.grouped),
+                status=status,
+                candidates=[reviewed_text],
                 image_description=image_description,
             )
             _report_progress(on_progress, "complete", 1.0)
@@ -492,6 +539,49 @@ class WebPromptService:
             for output in response.outputs
         ]
 
+    def known_tags(self) -> set[str]:
+        """The Danbooru dictionary, read once and only when something asks."""
+        if self._known_tags is None:
+            self._known_tags = load_or_fetch_tag_dictionary(TAG_DICT_PATH)
+        return self._known_tags
+
+    def _review_image_tags(
+        self,
+        image_path: str,
+        *,
+        tags: list[str],
+        image_description: str,
+        protected: list[str],
+        ollama_url: str,
+        vision_model: str,
+    ) -> tuple[TagReview, str]:
+        """The reviewed list, or the original one and the reason it stayed."""
+        unreviewed = TagReview(tags=list(tags))
+        try:
+            client = self.vision_factory(ollama_url, vision_model)
+            response = client.generate(
+                LLMRequest(
+                    prompt=build_tag_review_request(tags, description=image_description),
+                    image_paths=[image_path],
+                    temperature=0.0,
+                )
+            )
+        except Exception as exc:
+            # A review that cannot run must leave the tags exactly as they were.
+            return unreviewed, f"{vision_model}: {exc}"
+
+        if not response.outputs:
+            return unreviewed, f"{vision_model}: 応答が空でした。"
+        return (
+            apply_tag_review(
+                response.outputs[0],
+                tags=tags,
+                known_tags=self.known_tags(),
+                protected=protected,
+            ),
+            "",
+        )
+
     def clear_description_cache(self) -> None:
         """Drop cached descriptions so the next run really asks the VLM again."""
         self._description_cache.clear()
@@ -608,6 +698,23 @@ def _default_vision_factory(ollama_url: str, model: str) -> LLMClient:
         temperature=0.0,
         think=False,
     )
+
+
+def _review_status(review: TagReview, error: str, vision_model: str) -> str:
+    if error:
+        return f"タグ確認に失敗したため、タグはそのままです: {error}"
+    parts = []
+    if review.removed:
+        parts.append(f"削除: {', '.join(review.removed)}")
+    if review.added:
+        parts.append(f"追加: {', '.join(review.added)}")
+    if review.rejected:
+        # Reporting them is the point: a rejected proposal is the model telling
+        # you what it saw, in words the dictionary has no tag for.
+        parts.append(f"辞書にないため不採用: {', '.join(review.rejected)}")
+    if not parts:
+        return f"タグ確認（{vision_model}）: 変更の提案はありませんでした。"
+    return f"タグ確認（{vision_model}）: " + " / ".join(parts)
 
 
 def _manual_route(action: str, *, instruction: str, variants: int) -> RoutedPlan:

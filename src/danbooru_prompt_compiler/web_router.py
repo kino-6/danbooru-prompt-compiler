@@ -20,11 +20,14 @@ class WebAction(str, Enum):
     edit = "edit"
     next_panel = "next_panel"
     scene_prompt = "scene_prompt"
+    verify_tags = "verify_tags"
 
 
 # Natural-language prompts are a different output format, not a different
 # reading of the instruction, so only an explicit UI selection may choose one.
-MANUAL_ONLY_ACTIONS = {WebAction.scene_prompt}
+# Reviewing the tags is a check on the previous step rather than an answer to
+# the instruction, and it costs a vision call, so it is asked for too.
+MANUAL_ONLY_ACTIONS = {WebAction.scene_prompt, WebAction.verify_tags}
 
 
 class ActionPlan(BaseModel):

@@ -137,6 +137,15 @@ The workbench keeps the WD ONNX runtime and recent image-tag results cached, so 
 
 `VLMで画像を説明する` under the image workspace is on by default, so pull a vision model with `ollama pull qwen3-vl:8b` or change the model in the advanced settings. It also drives the pose, gaze, held-object, and spatial analysis used by image edits and next-panel requests. A vision model that is missing or failing never blocks prompt generation: the description is skipped and the reason appears in the status line under the prompt boxes. When a loaded model stops answering, press `VLMを復旧` beside the switch: it drops the cached description, unloads the model with `keep_alive: 0`, and loads a fresh instance, reporting the exact `ollama pull` or `ollama serve` command when that is the real problem. The advanced settings provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
 
+`操作種別 → タグをVLMで確認` shows the image and the inferred tags to the vision model and asks
+which of them are wrong and which known tags are missing. The tagger scores each tag on its own,
+so it reports plausible neighbours it could not rule out and drops whatever fell under the
+threshold; a model that can see the picture is the thing that judges the list. It never writes
+the list: every addition has to exist in `data/tags.json` and every removal has to name a tag
+already on it, so a proposal like `hand_drawn` is reported as rejected rather than adopted. Tags
+you typed by hand are never removed, and a vision model that fails leaves the list untouched with
+the reason in the status line. On the sample portrait it added `sketch`, `lineart`, and `fantasy`.
+
 `VLMモデル` in the advanced settings is a dropdown over the models in [Local Model Environment](#local-model-environment), labelled with their size and whether they are uncensored, and it still accepts any other pulled model typed straight into it. The connection check adds up what the current selection weighs and says so when it will not all stay resident - it names the heaviest model, since that is the one deciding what gets evicted, and a swap costs a full reload on every run.
 
 With the VLM enabled, every run on an image fills the `画像の説明（VLM）` box under the image with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
@@ -375,6 +384,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `tag_dictionary.py`: Danbooru tag dictionary loading, fetching, and writing.
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
+- `tag_review.py`: dictionary-bounded review of inferred tags against the image.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.
 

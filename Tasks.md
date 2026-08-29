@@ -51,14 +51,14 @@ and misses what a threshold cut off. A vision model cannot be trusted to invent 
 for tags directly it returned `red_circle` and `kappa-7391`, neither of them Danbooru - but
 it can judge a list it is handed against the picture.
 
-- [ ] Add an action that shows the image and the inferred tags to the vision model and asks
+- [x] Add an action that shows the image and the inferred tags to the vision model and asks
       which are wrong and which known tags are missing.
-- [ ] Restrict every proposal to the loaded tag dictionary, and drop anything outside it.
-- [ ] Report the verdict as an editable tag list, never as a silent rewrite.
+- [x] Restrict every proposal to the loaded tag dictionary, and drop anything outside it.
+- [x] Report the verdict as an editable tag list, never as a silent rewrite.
 
 ### Gate
 
-- [ ] Unit test proves a proposal outside the dictionary is dropped.
-- [ ] Unit test proves the verdict never removes a tag the user typed by hand.
-- [ ] Unit test proves a failing vision model leaves the original tags intact.
-- [ ] The full test suite and CI pass.
+- [x] Unit test proves a proposal outside the dictionary is dropped.
+- [x] Unit test proves the verdict never removes a tag the user typed by hand.
+- [x] Unit test proves a failing vision model leaves the original tags intact.
+- [x] The full test suite and CI pass (164 passed, 1 browser-only skip; 8 Chromium E2E passed).

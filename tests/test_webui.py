@@ -295,6 +295,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
         "edit",
         "next_panel",
         "scene_prompt",
+        "verify_tags",
     }
     assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["プライベート画像URLを許可"]["props"]["value"] is False

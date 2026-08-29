@@ -854,3 +854,88 @@ def test_a_typed_in_vision_model_still_reaches_the_vision_factory() -> None:
     )
 
     assert asked == ["some-other-vlm:4b"]
+
+
+class ReviewingVisionClient:
+    """Answers a tag review, and records the request it was given."""
+
+    def __init__(self, output: str) -> None:
+        self.output = output
+        self.last_request = None
+
+    def generate(self, request):
+        self.last_request = request
+        return LLMResponse(outputs=[self.output])
+
+
+def _review_service(vision_client, **kwargs) -> WebPromptService:
+    return WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.tag_image)
+        ),
+        vision_factory=lambda _url, _model: vision_client,
+        known_tags={"1girl", "rain", "elf", "pointy_ears", "power_(chainsaw_man)"},
+        **kwargs,
+    )
+
+
+def test_verifying_tags_shows_the_image_and_keeps_only_dictionary_proposals() -> None:
+    vision_client = ReviewingVisionClient("Remove: rain\nAdd: pointy_ears, red_circle")
+    service = _review_service(vision_client)
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="",
+        base_prompt="",
+        general_threshold=0.4,
+        action_override="verify_tags",
+        use_vision=False,
+    )
+
+    assert vision_client.last_request.image_paths == ["sample.png"]
+    assert "pointy_ears" in result.inferred_tags
+    assert "rain" not in result.inferred_tags
+    # A proposal the dictionary does not carry is reported, never adopted.
+    assert "red_circle" not in result.inferred_tags
+    assert "辞書にないため不採用: red_circle" in result.status
+
+
+def test_verifying_tags_never_removes_a_tag_the_user_typed() -> None:
+    vision_client = ReviewingVisionClient("Remove: elf, rain\nAdd: none")
+    service = _review_service(vision_client)
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="",
+        base_prompt="",
+        general_threshold=0.4,
+        action_override="verify_tags",
+        use_vision=False,
+        edited_tags="1girl, elf, rain",
+    )
+
+    assert "elf" in result.inferred_tags
+    assert "rain" in result.inferred_tags
+    assert "変更の提案はありませんでした" in result.status
+
+
+def test_a_failing_vision_model_leaves_the_reviewed_tags_intact() -> None:
+    class BrokenVisionClient:
+        def generate(self, _request):
+            raise RuntimeError("model missing")
+
+    service = _review_service(BrokenVisionClient())
+
+    result = service.run(
+        image_path="sample.png",
+        instruction="",
+        base_prompt="",
+        general_threshold=0.4,
+        action_override="verify_tags",
+        use_vision=False,
+    )
+
+    assert result.inferred_tags == "1girl, rain, power_(chainsaw_man)"
+    assert "タグ確認に失敗したため、タグはそのままです" in result.status
+    assert "model missing" in result.status

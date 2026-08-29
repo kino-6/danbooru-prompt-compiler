@@ -805,6 +805,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 ("既存プロンプト編集", "edit"),
                 ("次のコマ", "next_panel"),
                 ("自然文プロンプト", "scene_prompt"),
+                ("タグをVLMで確認", "verify_tags"),
             ],
             value="auto",
             label="操作種別",
