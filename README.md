@@ -104,11 +104,13 @@ The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface
 
 ## Web UI Prototype
 
-Install the optional Web UI dependency and pull the lightweight instruction router and prompt model:
+Install the optional Web UI dependency, then pull the instruction router and prompt model plus a
+vision model for the description step:
 
 ```bash
 uv sync --extra web --group test
 ollama pull qwen3:1.7b
+ollama pull qwen3-vl:8b
 ```
 
 Launch the local workbench:
@@ -118,6 +120,8 @@ uv run danbooru-prompt-web
 ```
 
 Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
+
+Those two pulls are the light setup and are enough to use every feature. Swapping in the uncensored vision model is covered in [Running the vision steps](#running-the-vision-steps).
 
 The `next_panel` action in this prototype is tag-assisted: WD Tagger summarizes the current image, then the text model proposes the next prompt while preserving the aspects the change slider holds fixed.
 
@@ -144,9 +148,52 @@ threshold; a model that can see the picture is the thing that judges the list. I
 the list: every addition has to exist in `data/tags.json` and every removal has to name a tag
 already on it, so a proposal like `hand_drawn` is reported as rejected rather than adopted. Tags
 you typed by hand are never removed, and a vision model that fails leaves the list untouched with
-the reason in the status line. On the sample portrait it added `sketch`, `lineart`, and `fantasy`.
+the reason in the status line.
 
 `VLMモデル` in the advanced settings is a dropdown over the models in [Local Model Environment](#local-model-environment), labelled with their size and whether they are uncensored, and it still accepts any other pulled model typed straight into it. The connection check adds up what the current selection weighs and says so when it will not all stay resident - it names the heaviest model, since that is the one deciding what gets evicted, and a swap costs a full reload on every run.
+
+### Running the vision steps
+
+A 26B vision model fills a 16 GB card on its own, so it cannot sit beside the 8B one or beside a
+separate prose model. That makes two working sets rather than a menu of independent settings:
+
+| | Light | Uncensored |
+| --- | --- | --- |
+| `VLMモデル` | `qwen3-vl:8b` | `unseen-gemma4:26b` |
+| `自然文プロンプト用モデル` | empty (reuses `qwen3:1.7b`) | `unseen-gemma4:26b` |
+| `自然文プロンプトに画像を渡す` | off | on |
+| Good for | iterating, prompt gacha, quick panels | finishing a prompt, material the light model will not describe |
+
+In the uncensored set, point both the vision step and the prose step at the same model. Naming two
+different large models means Ollama unloads one to load the other on every run, and the connection
+check will say so.
+
+Setting the uncensored one up once:
+
+```bash
+ollama pull hf.co/Jommarn/UNSEEN_Gemma_4_26B_NSFW-GGUF:Q4_K_M
+ollama cp hf.co/Jommarn/UNSEEN_Gemma_4_26B_NSFW-GGUF:Q4_K_M unseen-gemma4:26b
+```
+
+Then, with an image loaded:
+
+- **Fill the gaps in the tag list.** Run once with no instruction to get tags, then pick
+  `操作種別 → タグをVLMで確認`. On the sample portrait this added `sketch`, `lineart`, and
+  `fantasy`, all of which the tagger had dropped, and refused `hand_drawn` and `archer` as not
+  being in the dictionary. Correct the tag box by hand first if you want a tag protected - the
+  review never removes what you typed.
+- **Write a prose prompt from the picture.** Turn on `自然文プロンプトに画像を渡す`, choose a
+  `自然文プロンプトのテンプレート`, and press `自然文プロンプト`. The tags still travel with the
+  request, so the paragraph gains what only the image shows - on the sample it described a collar,
+  a dark vest, a waist pouch, and a skirt that no tag carried - without losing the discrete
+  features the tagger scored.
+- **Describe material the light model refuses.** Leave `VLMで画像を説明する` on and read the
+  `画像の説明（VLM）` box. That description is also what image edits and next-panel requests read
+  as context, so a description that came back sanitized was quietly costing those too.
+
+One caveat with the image attached: the model will state attributes the picture does not fix. On a
+monochrome line-art reference it wrote `long blonde hair` and `light eye colour`. Useful on a
+character sheet, wrong as a faithful caption - check the colour words before reusing the output.
 
 With the VLM enabled, every run on an image fills the `画像の説明（VLM）` box under the image with a plain-Japanese description of what is visible. It helps when the tagger returns fewer tags than expected, and it is editable: type or correct the description and the next run uses your text verbatim instead of calling the VLM again, which is the way to specify details the tag list cannot express. The description is written without reference to the instruction, so it is cached per image and model and reused when only the instruction changes. Image edits and next-panel requests pass it to the prompt model as context; a new prompt from text does not, because it is built from the instruction alone.
 
@@ -179,10 +226,8 @@ Tags anchor the discrete features, the image supplies the texture. Danbooru qual
 on the way in, so `bow_(weapon)` reaches the model as `bow` rather than leaking a parenthesis into
 the paragraph.
 
-One caveat: given the picture, the model will state attributes the picture does not fix. On a
-monochrome line-art reference it wrote `long blonde hair` and `light eye colour`. That is useful on
-a character sheet and wrong on a faithful description, so check the colour words before reusing the
-output as a caption.
+See [Running the vision steps](#running-the-vision-steps) for which model to pair this with and
+what it invents when it is on.
 
 The avoid line is the literal exclusion words plus the tags this image actually lost to the filter, written as words rather than tags (`bar_censor` becomes `bar censor`); a wildcard rule such as `*censor*` means nothing to a prose model, so the concrete evidence is used instead. A prose prompt is never followed by tag panels in boxes 2-4, and the router can never choose this action on its own - it is reachable only from the button or the `操作種別` selector.
 
