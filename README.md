@@ -123,7 +123,9 @@ uv run danbooru-prompt-web
 
 `やりたいこと` at the top of the page is the first thing to set, and it decides what the rest of the page shows: every input the chosen action cannot reach is hidden, so a setting that would be silently ignored is never offered. `おまかせ` keeps the original behaviour - the router reads the instruction and picks - and shows only what the router can actually reach, which is why the natural-language template and its settings appear only under `自然文プロンプト`. The run button changes with it: one action per task, plus `停止`.
 
-The page is laid out to fit a 1280x800 window without scrolling on every task, which is what decides several things about it: the prompt boxes arrive with the run that fills them rather than waiting empty, the typed image URL lives in `詳細設定` because dropping and pasting are the paths people actually use, and `詳細設定` and `実行の詳細` share a line since both are opened rarely.
+The page is laid out to fit one screen on every task, which is what decides several things about it: the prompt boxes arrive with the run that fills them rather than waiting empty, the typed image URL lives in `詳細設定` because dropping and pasting are the paths people actually use, and `詳細設定` and `実行の詳細` share a line since both are opened rarely.
+
+Measured content height runs 466-719px across the seven tasks, so every task fits a 1440x900 laptop or anything larger without scrolling. On a 1366x768 laptop the tallest tasks run about 120px over: everything needed to start a run is still on screen, and what falls below the fold is the collapsed panels.
 
 Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
 
@@ -376,6 +378,19 @@ Subset tags are treated as a reference menu, not as output. The CLI estimates us
 ```bash
 uv run pytest
 ```
+
+The browser end-to-end tests need Playwright, which lives in its own dependency group, and they
+only run when `RUN_BROWSER_E2E` is set - otherwise the module skips itself:
+
+```bash
+uv sync --extra web --group test --group web-test
+uv run playwright install chromium
+RUN_BROWSER_E2E=1 uv run pytest tests/browser
+```
+
+Sync with `--group web-test` whenever you sync at all. `uv sync --extra web --group test` on its
+own *removes* Playwright if it is already installed, and the browser tests then skip silently
+rather than failing.
 
 ## Tag Dictionary
 

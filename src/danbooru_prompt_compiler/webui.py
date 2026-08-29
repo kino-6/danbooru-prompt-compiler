@@ -730,7 +730,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             sources=["upload"],
             label="画像",
             placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
-            height=200,
+            height=150,
             interactive=True,
             elem_id="image-workspace",
             buttons=["fullscreen"],
@@ -777,7 +777,6 @@ def _build_image_column(gr) -> SimpleNamespace:
                 interactive=True,
                 elem_id="image-description-editor",
                 placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
-                info="書き換えるとVLMを再実行せず、その内容を使います。",
             )
     return SimpleNamespace(
         workspace=workspace,
