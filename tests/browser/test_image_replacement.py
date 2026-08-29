@@ -288,3 +288,72 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
     finally:
         image_server.shutdown()
         image_server.server_close()
+
+
+DROP_FILE_JS = """
+([b64, name]) => {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([bytes], name, {type: "image/png"}));
+  const target = document.querySelector("#image-workspace");
+  for (const type of ["dragenter", "dragover", "drop"]) {
+    target.dispatchEvent(
+      new DragEvent(type, {dataTransfer: transfer, bubbles: true, cancelable: true})
+    );
+  }
+}
+"""
+
+
+def test_dropping_a_file_replaces_an_already_loaded_image(tmp_path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (4, 4), "red").save(first)
+    Image.new("RGB", (4, 4), "blue").save(second)
+
+    with running_test_webui() as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_function(
+                "document.documentElement.dataset.imageUrlDropReady === 'true'"
+            )
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(first))
+            expect(page.locator('#image-workspace img[src*="first.png"]')).to_be_visible()
+
+            # Gradio's own dropzone is gone once an image is loaded, so a dropped
+            # file used to be swallowed and the workspace left as it was.
+            page.evaluate(
+                DROP_FILE_JS,
+                [base64.b64encode(second.read_bytes()).decode("ascii"), "second.png"],
+            )
+
+            expect(page.locator('#image-workspace img[src*="second.png"]')).to_be_visible()
+            expect(page.locator('#image-workspace img[src*="first.png"]')).to_have_count(0)
+            browser.close()
+
+
+def test_dropping_a_file_onto_an_empty_workspace_still_loads_it(tmp_path) -> None:
+    image = tmp_path / "only.png"
+    Image.new("RGB", (4, 4), "purple").save(image)
+
+    with running_test_webui() as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_function(
+                "document.documentElement.dataset.imageUrlDropReady === 'true'"
+            )
+            # The handler now claims file drops in both states, so the empty case
+            # has to keep working through the same path.
+            page.evaluate(
+                DROP_FILE_JS,
+                [base64.b64encode(image.read_bytes()).decode("ascii"), "only.png"],
+            )
+
+            expect(page.locator('#image-workspace img[src*="only.png"]')).to_be_visible()
+            browser.close()

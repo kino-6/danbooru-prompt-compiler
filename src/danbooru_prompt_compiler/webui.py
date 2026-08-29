@@ -149,11 +149,23 @@ IMAGE_INPUT_JS = r"""
 
   document.addEventListener("dragover", (event) => {
     if (!isImageWorkspace(event)) return;
-    const types = Array.from(event.dataTransfer?.types || []);
-    if (!types.includes("Files")) event.preventDefault();
+    // Claim every drag over the workspace. Gradio's own dropzone disappears once
+    // an image is loaded, and a dragover nobody cancels means the browser
+    // refuses the drop and the file never arrives.
+    event.preventDefault();
   }, true);
   document.addEventListener("drop", (event) => {
     if (!isImageWorkspace(event)) return;
+    const dropped = Array.from(event.dataTransfer?.files || [])
+      .find((file) => (file.type || "").startsWith("image/"));
+    if (dropped) {
+      // Feed the file in the same way a paste does, rather than leaving it to a
+      // dropzone that is not there when the workspace already holds an image.
+      event.preventDefault();
+      event.stopPropagation();
+      loadImageFile(dropped);
+      return;
+    }
     if (event.dataTransfer?.files?.length) return;
     const uriList = event.dataTransfer?.getData("text/uri-list") || "";
     const plainText = event.dataTransfer?.getData("text/plain") || "";
