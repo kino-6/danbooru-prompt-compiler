@@ -851,3 +851,15 @@ def test_the_first_prompt_box_drives_the_part_boxes() -> None:
     assert len(splitting) == 1
     # One update per box, plus the block that holds them all.
     assert len(splitting[0]["outputs"]) == len(webui.PART_LABELS) + 1
+
+
+def test_the_prose_prompt_has_a_box_of_its_own_and_waits_for_a_run() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    props = components["英文プロンプト"]["props"]
+
+    assert "copy" in props["buttons"]
+    # A box of its own, not one of the four: tags and prose are two readings of
+    # one result rather than two results competing for the same slot.
+    assert props["visible"] is False
+    assert components["英文プロンプトも出す"]["props"]["value"] is True

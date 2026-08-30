@@ -1156,3 +1156,94 @@ def test_a_next_panel_can_come_from_a_prompt_with_no_image_at_all() -> None:
     assert "aiming" in result.output
     assert "holding_bow_(weapon)" not in result.output
     assert "she looses the arrow." in result.panel_note
+
+
+def test_the_same_result_is_offered_as_tags_and_as_english_prose() -> None:
+    plan = ActionPlan(action=WebAction.compile, variants=1)
+    prose_client = RecordingTextClient(["Subject: a miko before a shrine"])
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        text_factory=lambda _url, _model: prose_client,
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    result = service.run(
+        image_path=None,
+        instruction="雨の神社に立つ巫女",
+        base_prompt="",
+        also_prose=True,
+        variants=1,
+    )
+
+    # Two readings of one result, so the tags are untouched by the prose step.
+    assert result.candidates[0]
+    assert "Subject: a miko before a shrine" in result.prose_prompt
+    assert "Subject:" not in result.output
+
+
+def test_prose_is_written_from_the_tags_that_were_produced() -> None:
+    plan = ActionPlan(action=WebAction.compile, variants=1)
+    prose_client = RecordingTextClient(["Subject: whatever"])
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(plan),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        text_factory=lambda _url, _model: prose_client,
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    service.run(
+        image_path=None, instruction="雨の神社", base_prompt="",
+        also_prose=True, variants=1,
+    )
+
+    # Not from the inferred tags: from the prompt the run actually produced.
+    assert "Observed in the reference image" in prose_client.last_request.prompt
+
+
+def test_a_failing_prose_step_costs_the_prose_and_not_the_tags() -> None:
+    class BrokenText:
+        def generate(self, _request):
+            raise RuntimeError("prose model missing")
+
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.compile, variants=1)
+        ),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        text_factory=lambda _url, _model: BrokenText(),
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    result = service.run(
+        image_path=None, instruction="雨の神社", base_prompt="",
+        also_prose=True, variants=1,
+    )
+
+    assert result.candidates[0]
+    assert result.prose_prompt == ""
+    assert "英文プロンプトを生成できませんでした" in result.status
+    assert "prose model missing" in result.status
+
+
+def test_prose_is_not_written_unless_it_is_asked_for() -> None:
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.compile, variants=1)
+        ),
+        compiler_factory=lambda _url, _model: FakeCompiler(),
+        text_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("prose costs a model call nobody asked for")
+        ),
+        scene_templates=SCENE_TEMPLATES,
+    )
+
+    result = service.run(
+        image_path=None, instruction="雨の神社", base_prompt="", variants=1
+    )
+
+    assert result.prose_prompt == ""

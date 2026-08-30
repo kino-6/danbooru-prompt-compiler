@@ -31,6 +31,7 @@ REMEMBERED_FIELDS: tuple[str, ...] = (
     "scene_template",
     "scene_model",
     "scene_sees_image",
+    "also_prose",
     "action_override",
     "use_vision",
     "vision_model",

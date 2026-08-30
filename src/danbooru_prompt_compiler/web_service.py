@@ -137,6 +137,7 @@ class WebRunRequest(BaseModel):
     scene_template: str = DEFAULT_SCENE_TEMPLATE
     scene_model: str = DEFAULT_SCENE_MODEL
     scene_sees_image: bool = False
+    also_prose: bool = True
     edited_tags: str = ""
     edited_description: str = ""
     action_override: str = "auto"
@@ -308,6 +309,10 @@ class WebRunResult:
     status: str
     candidates: list[str]
     image_description: str = ""
+    # The same result written as English prose, for image models that take
+    # sentences rather than tags. Kept beside the tags rather than replacing a
+    # variant: they are two readings of one result, not two results.
+    prose_prompt: str = ""
     # Kept apart from the status so the Web UI can carry it up from a follow-up
     # run, whose status otherwise just repeats the primary run's.
     panel_note: str = ""
@@ -357,6 +362,10 @@ class WebPromptService:
         scene_template: str = "",
         scene_model: str = "",
         scene_sees_image: bool = False,
+        # Off unless asked: prose costs another model call, and a caller that
+        # wants tags should not pay for sentences it never reads. The Web UI
+        # asks for it, which is where the setting lives.
+        also_prose: bool = False,
         edited_tags: str = "",
         edited_description: str = "",
         action_override: str = "auto",
@@ -619,6 +628,27 @@ class WebPromptService:
             description_cache_hit=description_cache_hit,
             description_error=description_error,
         )
+        # Newer image models take sentences, so the same result is offered both
+        # ways. A prose step that fails costs the prose, never the tags.
+        prose_prompt = ""
+        if also_prose and output_variants:
+            _report_progress(on_progress, "compilation", 0.9)
+            try:
+                prose_prompt = self._compose_scene_prompts(
+                    scene_template,
+                    instruction=clean_instruction,
+                    base_prompt=clean_base_prompt,
+                    image_tags=output_variants[0],
+                    image_description=image_description,
+                    exclusion_rules=exclusion_rules,
+                    excluded_image_tags=excluded_image_tags,
+                    variants=1,
+                    ollama_url=ollama_url,
+                    scene_model=scene_model or compiler_model,
+                    image_path=image_path if scene_sees_image else "",
+                )[0]
+            except Exception as exc:
+                status += f"\n\n英文プロンプトを生成できませんでした: {exc}"
         if panel_note:
             status += f"\n\n{panel_note}"
         if unknown_tags:
@@ -630,6 +660,7 @@ class WebPromptService:
             status=status,
             candidates=candidates,
             image_description=image_description,
+            prose_prompt=prose_prompt,
             panel_note=panel_note,
         )
         _report_progress(on_progress, "complete", 1.0)

@@ -68,8 +68,8 @@ def test_named_api_accepts_replacement_uploads_and_url(tmp_path) -> None:
     first_digest = hashlib.sha256(first.read_bytes()).hexdigest()
     second_digest = hashlib.sha256(second.read_bytes()).hexdigest()
     assert service.image_digests == [first_digest, second_digest, first_digest]
-    # plan, tags, description, 4 prompts, status, candidates, history
-    assert len(first_result) == 10
+    # plan, tags, description, 4 prompts, prose, status, candidates, history
+    assert len(first_result) == 11
     # Each prompt box now arrives as an update carrying its value and whether it
     # has anything to show.
     filled = [update["value"] for update in first_result[3:7]]

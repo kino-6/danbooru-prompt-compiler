@@ -352,6 +352,8 @@ class WorkbenchOutputs:
     status: str
     candidates: list[str]
     history: list[dict[str, str]]
+    # Empty on the error paths, which have no result to write prose from.
+    prose_prompt: str = ""
 
 
 def run_workbench(
@@ -436,6 +438,7 @@ def run_workbench(
         inferred_tags=result.inferred_tags,
         image_description=result.image_description,
         prompts=prompt_box_values(candidates),
+        prose_prompt=result.prose_prompt,
         status=status,
         candidates=candidates,
         history=updated_history,
@@ -510,6 +513,9 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.inferred_tags,
             outputs.image_description,
             *_prompt_updates(gr, outputs.prompts),
+            gr.update(
+                value=outputs.prose_prompt, visible=bool(outputs.prose_prompt)
+            ),
             outputs.status,
             gr.Radio(
                 choices=outputs.candidates,
@@ -547,7 +553,7 @@ def build_app(*, service: WebPromptService | None = None):
             "vision": [image.vision_box],
             "instruction": [controls.instruction],
             "base_prompt": [controls.base_prompt_box],
-            "follow_up": [controls.generate_next_panel],
+            "follow_up": [controls.follow_up_box],
             "panel_change": [controls.next_panel_box],
             "variants": [controls.variants_box],
             "scene_template": [controls.scene_template],
@@ -640,6 +646,7 @@ def build_app(*, service: WebPromptService | None = None):
             results.inferred_tags,
             image.description,
             *results.prompts,
+            results.prose_prompt,
             results.status,
             results.candidate_selector,
             results.history_state,
@@ -667,6 +674,7 @@ def build_app(*, service: WebPromptService | None = None):
                 "",
                 "",
                 *_prompt_updates(gr, blank_prompt_boxes()),
+                gr.update(value="", visible=False),
                 gr.Radio(choices=[], value=None),
                 {},
                 status,
@@ -691,6 +699,7 @@ def build_app(*, service: WebPromptService | None = None):
             image.description,
             controls.base_prompt,
             *results.prompts,
+            results.prose_prompt,
             results.candidate_selector,
             results.action_plan,
             results.status,
@@ -809,6 +818,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "scene_template": controls.scene_template,
         "scene_model": settings.scene_model,
         "scene_sees_image": settings.scene_sees_image,
+        "also_prose": controls.also_prose,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
         "action_override": task.action_override,
@@ -919,10 +929,16 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
                 lines=4,
                 elem_id="base-prompt-input",
             )
-        generate_next_panel = gr.Checkbox(
-            value=remembered(stored, "generate_next_panel", True),
-            label="次のコマも生成する（出力2〜4）",
-        )
+        with gr.Row() as follow_up_box:
+            generate_next_panel = gr.Checkbox(
+                value=remembered(stored, "generate_next_panel", True),
+                label="次のコマも生成する（出力2〜4）",
+            )
+            also_prose = gr.Checkbox(
+                value=remembered(stored, "also_prose", True),
+                label="英文プロンプトも出す",
+                elem_id="also-prose-input",
+            )
         # Two axes of the same question, so they sit on one line and toggle as one.
         with gr.Row() as next_panel_box:
             next_panel_time = gr.Slider(
@@ -979,6 +995,8 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
         variants=variants,
         variants_box=variants_box,
         generate_next_panel=generate_next_panel,
+        follow_up_box=follow_up_box,
+        also_prose=also_prose,
         next_panel_change=next_panel_change,
         next_panel_time=next_panel_time,
         next_panel_box=next_panel_box,
@@ -1181,6 +1199,15 @@ def _build_result_section(gr) -> SimpleNamespace:
                             elem_id=f"prompt-part-{category}",
                         )
                     )
+    prose_prompt = gr.Textbox(
+        label="英文プロンプト",
+        lines=4,
+        buttons=["copy"],
+        interactive=True,
+        visible=False,
+        elem_id="prose-prompt-output",
+        info="タグを受け付けないモデル向けの、同じ内容の英文です。",
+    )
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
@@ -1188,6 +1215,7 @@ def _build_result_section(gr) -> SimpleNamespace:
         inferred_tags=inferred_tags,
         prompts=prompts,
         parts=parts,
+        prose_prompt=prose_prompt,
         parts_box=parts_box,
         history_state=history_state,
         status=status,
