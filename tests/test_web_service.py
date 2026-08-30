@@ -1022,8 +1022,12 @@ def test_a_panel_that_did_not_move_is_reported_rather_than_returned_quietly() ->
 
     result = service.run(**_panel_options(action_override="next_panel"))
 
-    assert "1件は現在のコマと姿勢・構図が変わりませんでした" in result.status
-    assert "変化量を上げるか" in result.status
+    assert "1件とも姿勢・構図が変わりませんでした" in result.status
+    # The advice has to name a control that exists and a step that works: the
+    # instruction is passed to the request now, and 変化量 is not a slider.
+    assert "モデルが変更を提案しませんでした" in result.status
+    assert "経過する時間" in result.status
+    assert "変化量を上げる" not in result.status
 
 
 def test_a_failing_vision_model_falls_back_to_the_tag_compiler() -> None:

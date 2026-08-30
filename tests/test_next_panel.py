@@ -55,6 +55,7 @@ def test_the_request_asks_for_the_sentence_before_the_tags() -> None:
     request = build_next_panel_request(
         CURRENT,
         description="弓を構える少女",
+        instruction="振り返らせて",
         movement="a second or two - the action reaches its next stage",
         latitude="the pose and the framing only",
         protected=["1girl", "long_hair"],
@@ -68,6 +69,9 @@ def test_the_request_asks_for_the_sentence_before_the_tags() -> None:
     # The sentence comes first so that it drags the tags along behind it.
     assert request.index("Next:") < request.index("Remove:") < request.index("Add:")
     assert "A change of gaze or expression on its own is not a next panel" in request
+    # What the user typed is the panel they want, not a hint to weigh.
+    assert "in the user's own words: 振り返らせて" in request
+    assert "If the user asked for something, that is the next panel" in request
 
 
 def test_the_moment_sentence_is_read_back_and_a_missing_one_is_survivable() -> None:

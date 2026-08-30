@@ -139,7 +139,9 @@ The status line names what each panel actually moved - `-holding_bow_(weapon), l
 
 A picture is not required. With `既存プロンプト` filled in and no image, the same question goes to the prose model instead, and the dictionary bound does the same work - a small model asked this invents `bow_drawn` and `action_draw`, and they are refused rather than passed on.
 
-A proposal whose pose and framing match the panel it came from is not a next panel. The status line says how many came back unmoved rather than handing them over quietly. If the vision model is missing or fails, the run falls back to the old tag-only path with the reason in the status line.
+What you type in `どうしたい？` is passed to the request as the panel you want, and outranks everything the sliders say - `振り返らせて` produces `looking_back`, `膝をついて座らせて` produces `kneeling` and takes `standing` away. This is the reliable way to steer a panel; the sliders only say how far it may go.
+
+A proposal whose pose and framing match the panel it came from is not a next panel. When every panel comes back unmoved the status line says why rather than just that it happened: the model proposed nothing, or its proposals were refused by the dictionary (with their names), or only the clothing and appearance changed. Each case names the control that would actually help. If the vision model is missing or fails, the run falls back to the old tag-only path with the reason in the status line.
 
 The model sometimes answers in the right shape without the labels - the sentence, the removals and the additions as three bare lines - and the content is exactly right when it does. Those are relabelled rather than discarded: measured, discarding them threw away the best proposals of the set, including the only one that reached `aiming, drawing_bow` at that setting.
 

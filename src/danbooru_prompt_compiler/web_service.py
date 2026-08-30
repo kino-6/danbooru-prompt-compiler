@@ -555,6 +555,7 @@ class WebPromptService:
                     image_path or "",
                     tags=panel_tags,
                     image_description=image_description,
+                    instruction=routed.plan.edit_instruction or clean_instruction,
                     change=next_panel_change,
                     moment=next_panel_time,
                     variants=variants,
@@ -722,6 +723,7 @@ class WebPromptService:
         *,
         tags: list[str],
         image_description: str,
+        instruction: str,
         change: float,
         moment: float,
         variants: int,
@@ -741,6 +743,7 @@ class WebPromptService:
         request = build_next_panel_request(
             tags,
             description=image_description,
+            instruction=instruction,
             movement=profile.movement,
             latitude=profile.latitude,
             protected=protected,
@@ -773,12 +776,14 @@ class WebPromptService:
         # by one tag inside a list of twenty-five reads as no change at all
         # unless the change is named.
         lines: list[str] = []
+        reviews: list[TagReview] = []
         for output in response.outputs:
             answer = normalize_panel_answer(output)
             review = apply_tag_review(
                 answer, tags=tags, known_tags=known, protected=protected
             )
             panels.append(review.tags)
+            reviews.append(review)
             line = _panel_line(described_moment(answer), review)
             if line and line not in lines:
                 lines.append(line)
@@ -787,12 +792,18 @@ class WebPromptService:
         # A panel that matches the one it came from is not a next panel. Saying
         # so beats handing back a copy the user has to notice for themselves.
         still = sum(1 for panel in panels if not panel_moved(tags, panel))
-        note = (
-            f"次のコマ: {len(panels) - still}件が動き、{still}件は現在のコマと"
-            "姿勢・構図が変わりませんでした。変化量を上げるか、指示で動きを指定してください。"
-            if still
-            else f"次のコマ: {len(panels)}件すべてが現在のコマから動いています。"
-        )
+        if not still:
+            note = f"次のコマ: {len(panels)}件すべてが現在のコマから動いています。"
+        elif still == len(panels):
+            note = (
+                f"次のコマ: {still}件とも姿勢・構図が変わりませんでした。"
+                + _why_nothing_moved(reviews)
+            )
+        else:
+            note = (
+                f"次のコマ: {len(panels) - still}件が動き、{still}件は"
+                "姿勢・構図が変わりませんでした。"
+            )
         if lines:
             note = "{}\n\n{}".format(note, "\n".join(lines))
         return panels, note
@@ -959,18 +970,43 @@ def _default_vision_factory(ollama_url: str, model: str) -> LLMClient:
 
 
 def _panel_line(moment: str, review: TagReview) -> str:
-    """One panel: the sentence describing it, and the tags it actually moved."""
-    changed = []
+    """One panel: the sentence describing it, and what became of its tags."""
+    parts = []
     if review.removed:
-        changed.append("-" + ", ".join(review.removed))
+        parts.append("-" + ", ".join(review.removed))
     if review.added:
-        changed.append("+" + ", ".join(review.added))
-    if not moment and not changed:
+        parts.append("+" + ", ".join(review.added))
+    # A refused proposal is the usual reason a described change did not happen,
+    # and silence about it reads as the model having proposed nothing.
+    if review.rejected:
+        parts.append("辞書になし: " + ", ".join(review.rejected))
+    if not moment and not parts:
         return ""
-    if not changed:
-        return f"- {moment}"
-    diff = " / ".join(changed)
-    return f"- {moment} `{diff}`" if moment else f"- `{diff}`"
+    if not parts:
+        return f"- {moment}（タグの変更なし）"
+    detail = " / ".join(parts)
+    return f"- {moment} `{detail}`" if moment else f"- `{detail}`"
+
+
+def _why_nothing_moved(reviews: list[TagReview]) -> str:
+    """The reason the panels stood still, in terms of what to do about it."""
+    if any(review.rejected for review in reviews):
+        refused = sorted({tag for review in reviews for tag in review.rejected})
+        return (
+            "提案されたタグが辞書になく採用できませんでした"
+            f"（{', '.join(refused)}）。"
+            "「経過する時間」を上げるか、指示欄に動きを書いてください。"
+        )
+    if any(review.changed for review in reviews):
+        return (
+            "服装や外見だけが変わり、姿勢・構図は動きませんでした。"
+            "「経過する時間」を上げると動作が次の段階まで進みます。"
+        )
+    return (
+        "モデルが変更を提案しませんでした。"
+        "「経過する時間」を上げるか、指示欄に「振り返らせて」「弓を引かせて」"
+        "のように動きを書いてください。指示は次のコマの要求としてそのまま渡されます。"
+    )
 
 
 def _review_status(review: TagReview, error: str, vision_model: str) -> str:

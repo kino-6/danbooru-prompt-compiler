@@ -54,6 +54,7 @@ def build_next_panel_request(
     tags: list[str],
     *,
     description: str,
+    instruction: str,
     movement: str,
     latitude: str,
     protected: list[str],
@@ -71,6 +72,11 @@ def build_next_panel_request(
         "",
         f"Tags of the current panel: {', '.join(tags)}",
         _labelled("Description of the current panel", description),
+        # What the user typed outranks everything below: they are describing the
+        # panel they want, and the sliders only say how far it may go.
+        _labelled(
+            "What the next panel must show, in the user's own words", instruction
+        ),
         f"How much time passes: {movement}",
         f"What may be different: {latitude}",
         _labelled(
@@ -82,6 +88,10 @@ def build_next_panel_request(
         "Remove: the current tags that stop being true in it",
         "Add: Danbooru tags that become true in it",
         "",
+        "If the user asked for something, that is the next panel: make it "
+        "happen and name its tags."
+        if instruction.strip()
+        else None,
         "Write the sentence first and let it decide the tags. If the character "
         "is in the middle of an action - drawing a bow, reaching, running, "
         "turning - the next instant is the next stage of that action, so name "
