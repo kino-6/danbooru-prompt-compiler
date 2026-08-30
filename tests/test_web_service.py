@@ -254,7 +254,7 @@ def test_scene_prompt_fills_the_selected_template_from_tags_and_description() ->
 
     request = text_client.last_request.prompt
     assert "Produce a poster." in request
-    assert "Subject: hero element" in request
+    assert "- Subject -> cover hero element" in request
     # The filtered tags and the description are the raw material for the prose.
     assert "1girl, rain" in request
     assert "石段に立つ少女" in request

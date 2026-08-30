@@ -258,6 +258,8 @@ Pick the skeleton with `自然文プロンプトのテンプレート`:
 
 Everything here runs on the same local Ollama instance as the tag pipeline; nothing is sent anywhere. Writing English prose is harder than assembling a tag list, so `自然文プロンプト用モデル` in the advanced settings points this one step at a larger local model - `qwen3:8b`, `gemma3:12b`, or whatever is pulled - while routing and tag generation stay on the small fast model. Leave it empty to reuse the prompt-generation model. The Ollama connection check includes it, so a model that still needs an `ollama pull` is reported before a run fails.
 
+The request never shows a section in the answer's own shape. Written as `Subject: identity, apparent age, hair colour and style, eye colour, build`, the list of sections is a list of valid-looking answers, and copying one back is the easiest thing a small model can do - which is exactly what kept arriving as the subject. The guidance is written after an arrow instead, and a section answered with its own guidance is dropped rather than printed, so the gap is honest.
+
 Templates are plain YAML in `templates/`; drop a file in with `label`, `task`, `sections`, `delivery`, and an optional `order`, and it appears in the dropdown on the next launch. The model only fills the sections in - the shape is rebuilt locally afterwards, so a dropped or reordered section never corrupts the output.
 
 `自然文プロンプトに画像を渡す` in the advanced settings hands the reference image to the prose model

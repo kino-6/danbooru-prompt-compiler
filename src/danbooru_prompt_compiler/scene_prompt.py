@@ -82,8 +82,12 @@ def build_scene_prompt(
     at 0.92. So the tags are named as observed facts either way, and the model is
     told to account for all of them.
     """
+    # Never in the answer's own shape. Written as `Section: guidance` the list
+    # is a set of valid-looking answers, and copying one back is the easiest
+    # thing a small model can do - which is how "identity, apparent age, hair
+    # colour and style, eye colour, build" kept arriving as a subject.
     section_lines = [
-        f"{name}: {guidance}" for name, guidance in template.sections
+        f"- {name} -> cover {guidance}" for name, guidance in template.sections
     ]
     observed = ", ".join(humanize_tags(image_tags))
     known = [
@@ -112,6 +116,9 @@ def build_scene_prompt(
             "different character, setting, or outfit.",
             "Do not add sections, headings, numbering, markdown, or commentary.",
             "",
+            "Sections to fill in, in this order. The words after the arrow say "
+            "what each one has to cover; they are not an answer and must never "
+            "be written back.",
             *section_lines,
             "",
             *[part for part in known if part],
@@ -136,9 +143,11 @@ def render_scene_prompt(
     """
     filled = _parse_sections(raw_output)
     lines = [template.task, ""]
-    for name in template.section_names:
+    for name, guidance in template.sections:
         value = filled.get(name.lower())
-        if value:
+        # A section answered with its own guidance is not answered. Dropping it
+        # leaves an honest gap rather than printing the question as the answer.
+        if value and not _is_echo(value, guidance):
             lines.append(f"{name}: {value}")
     if len(lines) == 2:
         # Nothing parsed: keep the model's own words rather than an empty shell.
@@ -255,6 +264,15 @@ def humanize_avoid_terms(terms: list[str]) -> list[str]:
         if cleaned and cleaned not in humanized:
             humanized.append(cleaned)
     return humanized
+
+
+def _is_echo(value: str, guidance: str) -> bool:
+    """Whether a section came back as the words that asked for it."""
+    return _normalized(value) == _normalized(guidance)
+
+
+def _normalized(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
 def _read_template(path: Path) -> SceneTemplate | None:

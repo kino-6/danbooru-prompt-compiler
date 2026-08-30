@@ -70,8 +70,11 @@ def test_request_carries_the_slots_and_the_reference_material() -> None:
         avoid_terms=["censored", "watermark"],
     )
 
-    assert "Subject: who is in it" in request
-    assert "Lighting: how it is lit" in request
+    # Never in the answer's own shape: a `Section: guidance` line is a valid-
+    # looking answer, and copying one back is the easiest thing to do.
+    assert "- Subject -> cover who is in it" in request
+    assert "Subject: who is in it" not in request
+    assert "- Lighting -> cover how it is lit" in request
     assert "1girl, rain" in request
     assert "石段に立つ少女" in request
     assert "夜にして" in request
@@ -289,3 +292,39 @@ def test_the_request_asks_each_section_to_stay_in_its_lane() -> None:
 
     assert "Each section covers its own aspect and nothing else" in request
     assert "Never repeat in one section what another section has already said" in request
+
+
+def test_a_section_answered_with_its_own_guidance_is_not_an_answer() -> None:
+    # Presented as `Section: guidance`, the request was a list of valid-looking
+    # answers, and this one came back verbatim run after run.
+    rendered = render_scene_prompt(
+        "Subject: who is in it\nLighting: warm evening light",
+        TEMPLATE,
+        avoid_terms=[],
+    )
+
+    assert "who is in it" not in rendered
+    assert "Lighting: warm evening light" in rendered
+
+
+def test_an_echo_is_recognised_through_punctuation_and_case() -> None:
+    rendered = render_scene_prompt(
+        "Subject: Who is in it.\nLighting: warm evening light",
+        TEMPLATE,
+        avoid_terms=[],
+    )
+
+    assert "Who is in it" not in rendered
+
+
+def test_the_request_says_the_guidance_is_not_an_answer() -> None:
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=["1girl"],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=[],
+    )
+
+    assert "they are not an answer and must never be written back" in request
