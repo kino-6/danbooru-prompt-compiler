@@ -16,6 +16,7 @@ from .formatter import (
     format_variant,
     group_tags,
 )
+from .gpu_watch import DEFAULT_FOREIGN_LIMIT_MIB, wait_for_gpu
 from .image_tagger import (
     CHARACTER_CATEGORY,
     GENERAL_CATEGORY,
@@ -103,6 +104,7 @@ DEFAULT_NEXT_PANEL_TIME = 0.5
 SCENE_PROMPT_TEMPERATURE = 0.6
 # The floor for asking a deterministic band for more than one panel at once.
 MULTI_PANEL_TEMPERATURE = 0.5
+DEFAULT_GPU_WAIT_GB = DEFAULT_FOREIGN_LIMIT_MIB / 1024
 # The first template on disk, so the request model and the UI dropdown agree.
 DEFAULT_SCENE_TEMPLATE = next((template.name for template in load_templates()), "")
 ProgressCallback = Callable[[str, float], None]
@@ -153,6 +155,10 @@ class RunOptions(BaseModel):
     vision_model: str = DEFAULT_VISION_MODEL
     apply_tag_exclusions: bool = True
     excluded_tags: str = DEFAULT_EXCLUSION_TEXT
+    # Zero turns the wait off, which is the default here: probing the card
+    # shells out, and a library caller should not pay for that on every run.
+    # The Web UI asks for it, which is where the setting lives.
+    gpu_wait_gb: float = 0.0
 
 
 class WebRunRequest(RunOptions):
@@ -171,6 +177,9 @@ class WebRunRequest(RunOptions):
     # not, and pays for neither.
     also_prose: bool = True
     use_vision: bool = True
+    # Another program holding the card makes a run crawl rather than fail, so
+    # the workbench waits a little for it.
+    gpu_wait_gb: float = DEFAULT_GPU_WAIT_GB
     scene_template: str = DEFAULT_SCENE_TEMPLATE
     scene_model: str = DEFAULT_SCENE_MODEL
 
@@ -350,10 +359,11 @@ class RunContext:
     image_description: str
     description_cache_hit: bool | None
     description_error: str
+    gpu_note: str = ""
 
     def status(self) -> str:
         """The heading every action's status line starts from."""
-        return _status_text(
+        heading = _status_text(
             self.routed,
             image_result=self.image_result,
             image_cache_hit=self.image_cache_hit,
@@ -361,6 +371,7 @@ class RunContext:
             description_cache_hit=self.description_cache_hit,
             description_error=self.description_error,
         )
+        return f"{heading}\n\n{self.gpu_note}" if self.gpu_note else heading
 
 
 @dataclass(frozen=True)
@@ -442,6 +453,12 @@ class WebPromptService:
             has_image=bool(run_options.image_path),
             default_variants=run_options.variants,
         )
+        # A run that starts while something else holds the card does not fail,
+        # it crawls, so it is worth waiting a little before asking anything.
+        gpu_note = wait_for_gpu(
+            run_options.ollama_url,
+            limit_mib=int(run_options.gpu_wait_gb * 1024),
+        )
         _report_progress(on_progress, "routing", 0.05)
         if run_options.action_override == "auto":
             router = self.router_factory(
@@ -506,6 +523,7 @@ class WebPromptService:
             image_description=image_description,
             description_cache_hit=description_cache_hit,
             description_error=description_error,
+            gpu_note=gpu_note,
         )
 
         if routed.plan.action == WebAction.scene_prompt:

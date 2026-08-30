@@ -175,6 +175,10 @@ An image with no instruction is otherwise routed to plain tag extraction, so the
 
 Under the prompt boxes, the same groups the output is already organized into appear as separate copyable boxes - 人物, 外見, 服装, ポーズ, 情景, 画風, 構図, その他 - so a prompt can be reused piecewise: the character without the scene, the clothing without the pose. They are read back from prompt box 1 rather than kept from the run, so editing that box or adopting a candidate re-splits what you can see, and a group with nothing in it does not appear.
 
+`他タスクのGPU使用で待つ閾値（GB）` holds a run back while another program is on the card. A run that starts into a busy GPU does not fail - Ollama pushes layers onto the CPU and the run crawls - so a short wait is worth more than a slow answer.
+
+The obvious measure does not work: per-process VRAM reads `[N/A]` under Windows WDDM, and the total includes whatever Ollama is holding for us, so waiting on it would be waiting on ourselves. Ollama reports what it holds, and the total minus that is what everyone else holds. A model already resident skips the wait entirely, since nothing is going to be loaded and the warm runs are the fast ones. The wait is bounded at two minutes and the run always goes ahead, with what happened in the status line. Set it to 0 to switch it off, and it is off for library callers, who should not pay for a subprocess on every run.
+
 The workbench remembers how it was last left. Which models, where Ollama is, the thresholds, the output count, the sliders and the selected task are saved to `data/webui_settings.json` on every run and read back at launch. The work itself is never saved: an image, an instruction or a half-edited prompt belongs to the session that made it, and finding yesterday's instruction waiting in the box is worse than finding it empty. The file is gitignored, and a missing or hand-mangled one costs a control its memory rather than the page.
 
 The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
@@ -485,6 +489,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
 - `next_panel.py`: the moment after the current panel, bounded by the dictionary.
+- `gpu_watch.py`: whether another program is on the card, and how long to wait for it.
 - `settings_store.py`: the Web UI settings that survive a restart, and the work that does not.
 - `tag_review.py`: dictionary-bounded review of inferred tags against the image.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.

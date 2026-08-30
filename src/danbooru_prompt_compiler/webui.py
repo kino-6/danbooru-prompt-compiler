@@ -20,6 +20,7 @@ from .tag_filter import (
 )
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
+    DEFAULT_GPU_WAIT_GB,
     DEFAULT_NEXT_PANEL_CHANGE,
     DEFAULT_NEXT_PANEL_TIME,
     DEFAULT_OLLAMA_URL,
@@ -39,9 +40,8 @@ from .web_service import (
 
 
 web_app = typer.Typer(help="Launch the local Danbooru Prompt Workbench web UI.")
-# What the user is trying to do, asked first. Everything the answer cannot reach
-# is hidden, because a control that does nothing for the selected task is worse
-# than a missing one: it invites a setting that will be silently ignored.
+
+
 @dataclass(frozen=True)
 class Task:
     """One entry in the task selector, and everything that follows from it."""
@@ -51,9 +51,10 @@ class Task:
     fields: frozenset[str]
 
 
-# One definition per task, so a new one cannot be added to the selector without
-# saying what it shows - the choices and the visibility map are both read from
-# here rather than kept in step by hand.
+# What the user is trying to do, asked first. Everything the answer cannot reach
+# is hidden, because a control that does nothing for the selected task is worse
+# than a missing one: it invites a setting that will be silently ignored. One
+# definition per task, so a task cannot be offered without saying what it shows.
 TASKS: tuple[Task, ...] = (
     Task(
         "auto",
@@ -861,6 +862,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "use_vision": image.use_vision,
         "vision_model": settings.vision_model,
         "allow_private_image_urls": settings.allow_private_image_urls,
+        "gpu_wait_gb": settings.gpu_wait_gb,
         "apply_tag_exclusions": settings.apply_tag_exclusions,
         "excluded_tags": settings.excluded_tags,
     }
@@ -1099,6 +1101,15 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
                     "タグは事実として併せて渡すので特徴は落ちません。"
                 ),
             )
+        gpu_wait_gb = gr.Slider(
+            0.0,
+            12.0,
+            value=remembered(stored, "gpu_wait_gb", DEFAULT_GPU_WAIT_GB),
+            step=0.5,
+            label="他タスクのGPU使用で待つ閾値（GB）",
+            elem_id="gpu-wait-input",
+            info="他のプログラムがこれ以上VRAMを使っていたら、空くまで少し待ちます。0で無効。",
+        )
         allow_private_image_urls = gr.Checkbox(
             value=remembered(stored, "allow_private_image_urls", False),
             label="プライベート画像URLを許可",
@@ -1176,6 +1187,7 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
         scene_sees_image=scene_sees_image,
         scene_settings_box=scene_settings_box,
         allow_private_image_urls=allow_private_image_urls,
+        gpu_wait_gb=gpu_wait_gb,
         url_input=url_input,
         url_button=url_button,
         diagnostic_button=diagnostic_button,
