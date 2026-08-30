@@ -22,6 +22,12 @@ DELIVERY_SECTION = "Delivery"
 SECTION_PATTERN = re.compile(r"^\s*[-*]?\s*\**([A-Za-z][A-Za-z /]*?)\**\s*[:：]\s*(.+?)\s*$")
 FENCE_PATTERN = re.compile(r"^\s*```.*$")
 QUALIFIER_PATTERN = re.compile(r"_\([^)]*\)")
+# A short label followed by a colon, at the start of a fragment or right
+# after a separator. Bounded to a few words so a colon inside real prose is
+# left alone, and letters-only so a ratio like 16:9 survives.
+INLINE_LABEL_PATTERN = re.compile(
+    r"(?:(?<=^)|(?<=[,;.]\s)|(?<=[,;.]))\s*[A-Za-z][A-Za-z/\- ]{0,28}?\s*:\s*"
+)
 
 
 @dataclass(frozen=True)
@@ -160,12 +166,28 @@ def flatten_scene_prompt(rendered: str) -> str:
         name, value = match.group(1).strip(), match.group(2).strip()
         if name in {DELIVERY_SECTION, AVOID_SECTION}:
             continue
-        fragment = value.rstrip(" .,;")
+        fragment = _strip_inline_labels(value).rstrip(" .,;")
         if fragment:
             fragments.append(fragment)
     if not fragments:
         return ""
     return ". ".join(fragments) + "."
+
+
+def _strip_inline_labels(value: str) -> str:
+    """Drop the sub-headings a model writes inside a section it is filling in.
+
+    The template's guidance is a list of what to cover - `outfit, layers,
+    accessories` - and the model often answers by repeating each word as a
+    label: `Outfit: white kosode, layers: two, accessories: none`. Stripping the
+    section name alone leaves those behind, which is exactly the noise the
+    stripping was for.
+    """
+    cleaned = INLINE_LABEL_PATTERN.sub("", value)
+    # The match reaches back over the separator's space to take the label with
+    # it, so the spacing is put back rather than left as `a miko,young adult`.
+    cleaned = re.sub(r"\s*([,;])\s*", r"\1 ", cleaned)
+    return re.sub(r"\s{2,}", " ", cleaned).strip(" ,;")
 
 
 def scene_avoid_line(rendered: str) -> str:

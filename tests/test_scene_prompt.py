@@ -206,3 +206,41 @@ def test_the_avoid_terms_come_back_on_their_own() -> None:
 def test_prose_with_nothing_parseable_flattens_to_nothing() -> None:
     assert flatten_scene_prompt("") == ""
     assert flatten_scene_prompt("just a sentence with no sections") == ""
+
+
+def test_the_sub_headings_a_model_writes_inside_a_section_go_too() -> None:
+    # The template's guidance is a list of what to cover, and the model answers
+    # by repeating each word as a label. Stripping the section name alone left
+    # exactly the noise the stripping was for.
+    plain = flatten_scene_prompt(
+        "Subject: a miko, apparent age: young adult, hair: long black\n"
+        "Clothing: Outfit: white kosode and red hakama, accessories: none\n"
+        "Lighting: key light direction: from above, colour temperature: cool"
+    )
+
+    for label in ("Outfit:", "accessories:", "colour temperature:", "apparent age:"):
+        assert label not in plain
+    assert plain == (
+        "a miko, young adult, long black. white kosode and red hakama, none. "
+        "from above, cool."
+    )
+
+
+def test_stripping_labels_leaves_the_separators_readable() -> None:
+    plain = flatten_scene_prompt("Subject: a miko, hair: long black, eyes: dark")
+
+    # The match reaches back over the separator's space to take the label.
+    assert ",young" not in plain
+    assert plain == "a miko, long black, dark."
+
+
+def test_a_colon_that_is_not_a_label_survives() -> None:
+    plain = flatten_scene_prompt("Layout: full body shot, aspect ratio 16:9, centered")
+
+    assert "16:9" in plain
+
+
+def test_prose_without_sub_headings_is_left_alone() -> None:
+    plain = flatten_scene_prompt("Subject: a young elf girl with a bow, standing in profile")
+
+    assert plain == "a young elf girl with a bow, standing in profile."
