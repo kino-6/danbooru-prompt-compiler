@@ -11,7 +11,11 @@ from danbooru_prompt_compiler.image_tagger import (
 from danbooru_prompt_compiler.models import CompileResult, LLMResponse
 from danbooru_prompt_compiler.scene_prompt import SceneTemplate
 from danbooru_prompt_compiler.web_router import ActionPlan, RoutedPlan, WebAction
-from danbooru_prompt_compiler.web_service import WebPromptService
+from danbooru_prompt_compiler.web_service import (
+    WEB_RUN_FIELDS,
+    WebPromptService,
+    WebRunRequest,
+)
 
 
 class FakeTagger:
@@ -1042,3 +1046,30 @@ def test_a_failing_vision_model_falls_back_to_the_tag_compiler() -> None:
     assert "タグからの生成に戻しました" in result.status
     assert "model missing" in result.status
     assert result.output
+
+
+def test_a_control_nobody_touched_falls_back_to_its_default() -> None:
+    # Gradio sends None for an untouched textbox, and every field but the image
+    # path is non-optional, so a run before anything was typed into used to
+    # raise a validation error instead of running.
+    values = list(WebRunRequest().to_values())
+    for field in ("image_url", "base_prompt", "edited_tags", "edited_description"):
+        values[WEB_RUN_FIELDS.index(field)] = None
+    values[WEB_RUN_FIELDS.index("image_path")] = None
+
+    request = WebRunRequest.from_values(values)
+
+    assert request.image_url == ""
+    assert request.base_prompt == ""
+    assert request.edited_tags == ""
+    # The image path is genuinely optional and keeps its None.
+    assert request.image_path is None
+
+
+def test_supplied_values_still_win_over_the_defaults() -> None:
+    values = list(WebRunRequest(instruction="夜にして", variants=2).to_values())
+
+    request = WebRunRequest.from_values(values)
+
+    assert request.instruction == "夜にして"
+    assert request.variants == 2

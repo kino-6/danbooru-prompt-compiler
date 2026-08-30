@@ -163,6 +163,10 @@ Two sliders describe the panel to ask for, because one was doing the work of bot
 
 An image with no instruction is otherwise routed to plain tag extraction, so the main controls also carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and fills all four boxes with panels at the selected change amount.
 
+Under the prompt boxes, the same groups the output is already organized into appear as separate copyable boxes - 人物, 外見, 服装, ポーズ, 情景, 画風, 構図, その他 - so a prompt can be reused piecewise: the character without the scene, the clothing without the pose. They are read back from prompt box 1 rather than kept from the run, so editing that box or adopting a candidate re-splits what you can see, and a group with nothing in it does not appear.
+
+The workbench remembers how it was last left. Which models, where Ollama is, the thresholds, the output count, the sliders and the selected task are saved to `data/webui_settings.json` on every run and read back at launch. The work itself is never saved: an image, an instruction or a half-edited prompt belongs to the session that made it, and finding yesterday's instruction waiting in the box is worse than finding it empty. The file is gitignored, and a missing or hand-mangled one costs a control its memory rather than the page.
+
 The workbench keeps the WD ONNX runtime and recent image-tag results cached, so changing only the instruction avoids repeating model initialization and image inference. Inferred tags are editable. Generated variants can be selected and adopted as the next base prompt; the most recent 20 runs are kept in per-session history.
 
 `VLMで画像を説明する` under the image workspace is on by default, so pull a vision model with `ollama pull qwen3-vl:8b` or change the model in the advanced settings. It also drives the pose, gaze, held-object, and spatial analysis used by image edits and next-panel requests. A vision model that is missing or failing never blocks prompt generation: the description is skipped and the reason appears in the status line under the prompt boxes. When a loaded model stops answering, press `VLMを復旧` beside the switch: it drops the cached description, unloads the model with `keep_alive: 0`, and loads a fresh instance, reporting the exact `ollama pull` or `ollama serve` command when that is the real problem. The advanced settings provide an Ollama connection check that reports missing models with exact `ollama pull` commands.
@@ -471,6 +475,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
 - `next_panel.py`: the moment after the current panel, bounded by the dictionary.
+- `settings_store.py`: the Web UI settings that survive a restart, and the work that does not.
 - `tag_review.py`: dictionary-bounded review of inferred tags against the image.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.

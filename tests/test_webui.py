@@ -786,3 +786,68 @@ def test_the_prose_model_can_defer_to_the_prompt_generation_model() -> None:
         "qwen3:8b",
         "unseen-gemma4:26b",
     ]
+
+
+def test_a_prompt_splits_into_the_groups_it_is_already_printed_in() -> None:
+    grouped = (
+        "===\n"
+        "1girl, solo\n"
+        "long_hair\n"
+        "school_uniform\n"
+        "standing, looking_at_viewer\n"
+        "shrine, rain, night\n"
+        "===\n"
+        "\n"
+        "subject: 1girl, solo\n"
+        "appearance: long_hair\n"
+        "clothing: school_uniform\n"
+        "pose: standing, looking_at_viewer\n"
+        "scene: shrine, rain, night"
+    )
+
+    parts = webui.prompt_parts(grouped)
+
+    assert parts["subject"] == "1girl, solo"
+    assert parts["clothing"] == "school_uniform"
+    assert parts["scene"] == "shrine, rain, night"
+    # The block and its labelled copy describe one prompt, not two.
+    assert parts["pose"] == "standing, looking_at_viewer"
+
+
+def test_a_variant_heading_is_not_mistaken_for_a_tag() -> None:
+    parts = webui.prompt_parts("[variant 2]\n===\n1girl, solo\nshrine\n===")
+
+    assert parts["subject"] == "1girl, solo"
+    assert "variant" not in ", ".join(parts.values())
+
+
+def test_a_flat_prompt_splits_just_as_well_and_an_empty_one_gives_nothing() -> None:
+    assert webui.prompt_parts("1girl, solo, shrine, rain")["scene"] == "shrine, rain"
+    assert webui.prompt_parts("") == {}
+
+
+def test_the_part_boxes_are_copyable_and_wait_for_a_run() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    for _category, label in webui.PART_LABELS:
+        props = components[label]["props"]
+        assert "copy" in props["buttons"], label
+        # Eight empty boxes on an untouched page would undo the layout work.
+        assert props["visible"] is False, label
+
+
+def test_the_first_prompt_box_drives_the_part_boxes() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    box_id = components["出力プロンプト 1"]["id"]
+
+    splitting = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if any(target == (box_id, "change") for target in dependency.get("targets") or [])
+    ]
+
+    assert len(splitting) == 1
+    # One update per box, plus the block that holds them all.
+    assert len(splitting[0]["outputs"]) == len(webui.PART_LABELS) + 1

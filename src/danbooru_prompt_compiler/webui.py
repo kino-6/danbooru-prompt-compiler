@@ -6,9 +6,12 @@ from types import SimpleNamespace
 
 import typer
 
+from .formatter import group_tags
 from .image_source import load_image_url_preview, resolve_image_source
+from .normalizer import normalize_tags, parse_tag_text
 from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
 from .scene_prompt import load_templates
+from .settings_store import load_settings, remembered, save_settings
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -214,6 +217,45 @@ IMAGE_INPUT_JS = r"""
   }, true);
 }
 """
+
+
+# The output already groups tags; these are the same groups as copyable parts,
+# so a prompt can be reused piecewise - the character without the scene, the
+# clothing without the pose.
+PART_LABELS: tuple[tuple[str, str], ...] = (
+    ("subject", "人物"),
+    ("appearance", "外見"),
+    ("clothing", "服装"),
+    ("pose", "ポーズ"),
+    ("scene", "情景"),
+    ("style", "画風"),
+    ("composition", "構図"),
+    ("other", "その他"),
+)
+
+
+def prompt_parts(prompt: str) -> dict[str, str]:
+    """The grouped tag lines of a prompt, by category.
+
+    Read back from the prompt box rather than kept from the run, so an edited
+    box and an adopted candidate both give the parts you can see.
+    """
+    tags = normalize_tags(parse_tag_text(_prompt_body(prompt)))
+    return {
+        category: ", ".join(values) for category, values in group_tags(tags).items()
+    }
+
+
+def _prompt_body(prompt: str) -> str:
+    """The tags out of a grouped block, without its `category:` labels."""
+    lines: list[str] = []
+    for line in (prompt or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("===") or stripped.startswith("["):
+            continue
+        _label, sep, rest = stripped.partition(":")
+        lines.append(rest if sep else stripped)
+    return ", ".join(lines)
 
 
 def prepend_history(
@@ -433,11 +475,15 @@ def build_app(*, service: WebPromptService | None = None):
         raise RuntimeError("Web UI dependencies are missing; run 'uv sync --extra web'.") from exc
 
     prompt_service = service or WebPromptService()
+    stored = load_settings()
 
     def dispatch(values, progress, *, action_override: str | None = None):
         """Gradio adapter: ordered values in, Gradio component updates out."""
         *run_values, history = values
         request = WebRunRequest.from_values(run_values)
+        # Saved from the request rather than from a button, so the settings that
+        # come back are the ones that were actually last run with.
+        save_settings(request.model_dump())
         if action_override is not None:
             request = request.model_copy(update={"action_override": action_override})
 
@@ -477,13 +523,13 @@ def build_app(*, service: WebPromptService | None = None):
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
-        task = _build_task_selector(gr)
+        task = _build_task_selector(gr, stored)
         with gr.Row():
-            image = _build_image_column(gr)
-            controls = _build_instruction_column(gr)
+            image = _build_image_column(gr, stored)
+            controls = _build_instruction_column(gr, stored)
         results = _build_result_section(gr)
         with gr.Row():
-            settings = _build_advanced_settings(gr)
+            settings = _build_advanced_settings(gr, stored)
             results = SimpleNamespace(**vars(results), **vars(_build_run_details(gr)))
 
         # A field name can own more than one component - a button and the hint
@@ -502,6 +548,17 @@ def build_app(*, service: WebPromptService | None = None):
             "scene_prompt": [controls.scene_prompt_button],
         }
         assert tuple(task_components) == TASK_FIELD_ORDER
+        # The page opens on the remembered task, so the built-in visibility
+        # would otherwise be a layout for a task nobody selected.
+        initial = dict(
+            zip(
+                TASK_FIELD_ORDER,
+                task_field_visibility(task.action_override.value),
+            )
+        )
+        for name, components in task_components.items():
+            for component in components:
+                component.visible = initial[name]
 
         # These two sit beside 実行 under おまかせ, but stand alone under their own
         # task, and the only action on the page should not look like a secondary one.
@@ -534,6 +591,28 @@ def build_app(*, service: WebPromptService | None = None):
                 for name in TASK_FIELD_ORDER
                 for component in task_components[name]
             ],
+            queue=False,
+        )
+
+        def show_parts(prompt: str):
+            found = prompt_parts(prompt)
+            return [
+                gr.update(visible=bool(found)),
+                *(
+                    gr.update(
+                        value=found.get(category, ""),
+                        visible=bool(found.get(category)),
+                    )
+                    for category, _label in PART_LABELS
+                ),
+            ]
+
+        # Driven by the box rather than by the run, so an edited prompt and an
+        # adopted candidate both split into the parts you can actually see.
+        results.prompts[0].change(
+            show_parts,
+            inputs=results.prompts[0],
+            outputs=[results.parts_box, *results.parts],
             queue=False,
         )
 
@@ -736,18 +815,18 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
     return [run_components[name] for name in WEB_RUN_FIELDS]
 
 
-def _build_task_selector(gr) -> SimpleNamespace:
+def _build_task_selector(gr, stored: dict) -> SimpleNamespace:
     """The first question, and the one that decides what the rest of the page shows."""
     action_override = gr.Radio(
         choices=list(TASK_CHOICES),
-        value="auto",
+        value=remembered(stored, "action_override", "auto"),
         label="やりたいこと",
         elem_id="task-selector",
     )
     return SimpleNamespace(action_override=action_override)
 
 
-def _build_image_column(gr) -> SimpleNamespace:
+def _build_image_column(gr, stored: dict) -> SimpleNamespace:
     """Unified image workspace plus the hidden bridge that URL drops write into."""
     with gr.Column():
         workspace = gr.Image(
@@ -781,7 +860,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             # pressed rarely, and a row of its own cost 40px on every page.
             with gr.Row():
                 use_vision = gr.Checkbox(
-                    value=True,
+                    value=remembered(stored, "use_vision", True),
                     label="VLMで画像を説明する",
                     info="ポーズや位置関係の解析にも使います。",
                     scale=3,
@@ -816,7 +895,7 @@ def _build_image_column(gr) -> SimpleNamespace:
     )
 
 
-def _build_instruction_column(gr) -> SimpleNamespace:
+def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
     """Instruction, optional base prompt, output count, and the run controls."""
     with gr.Column():
         instruction = gr.Textbox(
@@ -832,7 +911,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
                 elem_id="base-prompt-input",
             )
         generate_next_panel = gr.Checkbox(
-            value=True,
+            value=remembered(stored, "generate_next_panel", True),
             label="次のコマも生成する（出力2〜4）",
         )
         # Two axes of the same question, so they sit on one line and toggle as one.
@@ -840,7 +919,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             next_panel_time = gr.Slider(
                 0.0,
                 1.0,
-                value=DEFAULT_NEXT_PANEL_TIME,
+                value=remembered(stored, "next_panel_time", DEFAULT_NEXT_PANEL_TIME),
                 step=0.1,
                 label="経過する時間",
                 elem_id="next-panel-time",
@@ -848,14 +927,14 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             next_panel_change = gr.Slider(
                 0.0,
                 1.0,
-                value=DEFAULT_NEXT_PANEL_CHANGE,
+                value=remembered(stored, "next_panel_change", DEFAULT_NEXT_PANEL_CHANGE),
                 step=0.1,
                 label="変わってよい範囲",
                 elem_id="next-panel-change",
             )
         scene_template = gr.Dropdown(
             choices=[(template.label, template.name) for template in load_templates()],
-            value=DEFAULT_SCENE_TEMPLATE,
+            value=remembered(stored, "scene_template", DEFAULT_SCENE_TEMPLATE),
             label="自然文プロンプトのテンプレート",
             elem_id="scene-template",
             visible=False,
@@ -867,7 +946,7 @@ def _build_instruction_column(gr) -> SimpleNamespace:
             gr.Markdown("出力数", container=False, scale=0)
             variants = gr.Radio(
                 choices=[1, 2, 3, 4],
-                value=4,
+                value=remembered(stored, "variants", 4),
                 label="出力数",
                 container=False,
                 scale=4,
@@ -902,29 +981,29 @@ def _build_instruction_column(gr) -> SimpleNamespace:
     )
 
 
-def _build_advanced_settings(gr) -> SimpleNamespace:
+def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
     """Folded models, diagnostics, tagging thresholds, and exclusion words."""
     with gr.Accordion("詳細設定", open=False):
         with gr.Row():
             router_model = gr.Dropdown(
                 choices=list(TEXT_MODEL_CHOICES),
-                value=DEFAULT_ROUTER_MODEL,
+                value=remembered(stored, "router_model", DEFAULT_ROUTER_MODEL),
                 allow_custom_value=True,
                 label="指示ルーターモデル",
             )
             compiler_model = gr.Dropdown(
                 choices=list(TEXT_MODEL_CHOICES),
-                value=DEFAULT_COMPILER_MODEL,
+                value=remembered(stored, "compiler_model", DEFAULT_COMPILER_MODEL),
                 allow_custom_value=True,
                 label="プロンプト生成モデル",
             )
             ollama_url = gr.Textbox(
-                value=DEFAULT_OLLAMA_URL,
+                value=remembered(stored, "ollama_url", DEFAULT_OLLAMA_URL),
                 label="Ollama URL",
             )
             vision_model = gr.Dropdown(
                 choices=list(VISION_MODEL_CHOICES),
-                value=DEFAULT_VISION_MODEL,
+                value=remembered(stored, "vision_model", DEFAULT_VISION_MODEL),
                 allow_custom_value=True,
                 label="VLMモデル",
                 info=(
@@ -935,7 +1014,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         with gr.Group(visible=False) as scene_settings_box:
             scene_model = gr.Dropdown(
                 choices=list(SCENE_MODEL_CHOICES),
-                value=DEFAULT_SCENE_MODEL,
+                value=remembered(stored, "scene_model", DEFAULT_SCENE_MODEL),
                 allow_custom_value=True,
                 label="自然文プロンプト用モデル",
                 elem_id="scene-model-input",
@@ -952,7 +1031,7 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 ),
             )
         allow_private_image_urls = gr.Checkbox(
-            value=False,
+            value=remembered(stored, "allow_private_image_urls", False),
             label="プライベート画像URLを許可",
         )
         with gr.Accordion(
@@ -976,17 +1055,29 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         diagnostic_output = gr.Markdown(label="Ollama診断")
         with gr.Row():
             general_threshold = gr.Slider(
-                0.0, 1.0, value=0.35, step=0.01, label="一般タグ閾値"
+                0.0,
+                1.0,
+                value=remembered(stored, "general_threshold", 0.35),
+                step=0.01,
+                label="一般タグ閾値",
             )
             character_threshold = gr.Slider(
-                0.0, 1.0, value=0.85, step=0.01, label="キャラクター閾値"
+                0.0,
+                1.0,
+                value=remembered(stored, "character_threshold", 0.85),
+                step=0.01,
+                label="キャラクター閾値",
             )
             max_image_tags = gr.Slider(
-                1, 100, value=50, step=1, label="画像タグ上限"
+                1,
+                100,
+                value=remembered(stored, "max_image_tags", 50),
+                step=1,
+                label="画像タグ上限",
             )
         with gr.Accordion("除外ワード", open=True):
             apply_tag_exclusions = gr.Checkbox(
-                value=True,
+                value=remembered(stored, "apply_tag_exclusions", True),
                 label="除外ワードを適用",
             )
             excluded_tags = gr.Textbox(
@@ -1061,12 +1152,34 @@ def _build_result_section(gr) -> SimpleNamespace:
     with gr.Row():
         prompts.append(prompt_box(3))
         prompts.append(prompt_box(4))
+    # The same groups the output is already organized into, one box each, so a
+    # prompt can be reused piecewise. Hidden until a run fills them, like the
+    # prompt boxes above.
+    parts: list = []
+    # The rows keep their gap even with every child hidden, so the whole block
+    # comes and goes rather than each box on its own.
+    with gr.Group(visible=False) as parts_box:
+        for row_start in range(0, len(PART_LABELS), 4):
+            with gr.Row():
+                for category, label in PART_LABELS[row_start : row_start + 4]:
+                    parts.append(
+                        gr.Textbox(
+                            label=label,
+                            lines=2,
+                            buttons=["copy"],
+                            interactive=True,
+                            visible=False,
+                            elem_id=f"prompt-part-{category}",
+                        )
+                    )
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
     return SimpleNamespace(
         inferred_tags=inferred_tags,
         prompts=prompts,
+        parts=parts,
+        parts_box=parts_box,
         history_state=history_state,
         status=status,
     )

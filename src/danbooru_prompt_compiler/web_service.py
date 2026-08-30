@@ -143,7 +143,22 @@ class WebRunRequest(BaseModel):
 
     @classmethod
     def from_values(cls, values: Sequence[object]) -> "WebRunRequest":
-        return cls(**dict(zip(WEB_RUN_FIELDS, values)))
+        """Build a request from the Gradio inputs, in their declared order.
+
+        Gradio sends `None` for a control nobody has touched, and every field
+        but the image path is declared non-optional - so a run started before
+        anything had been typed into raised a validation error rather than
+        running. An untouched control means "unset", which is what the field
+        default already says.
+        """
+        supplied = dict(zip(WEB_RUN_FIELDS, values))
+        return cls(
+            **{
+                name: value
+                for name, value in supplied.items()
+                if value is not None or name == "image_path"
+            }
+        )
 
     def to_values(self) -> list[object]:
         return [getattr(self, name) for name in WEB_RUN_FIELDS]
