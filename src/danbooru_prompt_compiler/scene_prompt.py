@@ -150,13 +150,17 @@ def render_scene_prompt(
 
 
 def flatten_scene_prompt(rendered: str) -> str:
-    """The template's contents as one paragraph, with the scaffolding gone.
+    """The template's contents with the scaffolding gone, one section per line.
 
     `Subject:` and the rest are scaffolding for writing the prompt, not part of
     it: an image model reads them as words. The task line and `Delivery` address
     the model about the deliverable rather than describing the picture, and
     `Avoid` belongs in a negative prompt, so all three stay behind in the
     full version.
+
+    The line breaks stay. Run into one paragraph the result is still a valid
+    prompt, but the sections can no longer be told apart, and telling them apart
+    is what makes the output worth editing afterwards.
     """
     fragments: list[str] = []
     for line in (rendered or "").splitlines():
@@ -169,9 +173,7 @@ def flatten_scene_prompt(rendered: str) -> str:
         fragment = _strip_inline_labels(value).rstrip(" .,;")
         if fragment:
             fragments.append(fragment)
-    if not fragments:
-        return ""
-    return ". ".join(fragments) + "."
+    return "\n".join(f"{fragment}." for fragment in fragments)
 
 
 def _strip_inline_labels(value: str) -> str:

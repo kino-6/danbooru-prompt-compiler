@@ -189,8 +189,12 @@ def test_the_pasteable_prose_drops_the_scaffolding_that_wrote_it() -> None:
     # `Subject:` and the rest are how the prompt was written; an image model
     # reads them as words.
     assert "Subject:" not in plain and "Clothing:" not in plain
-    assert plain.startswith("a miko, long black hair. white kosode and red hakama.")
-    assert "standing before a shrine." in plain
+    # One section per line: run together they cannot be told apart afterwards.
+    assert plain.splitlines() == [
+        "a miko, long black hair.",
+        "white kosode and red hakama.",
+        "standing before a shrine.",
+    ]
     # The task line addresses the model about the deliverable, not the picture.
     assert "character design sheet" not in plain
     assert "One full-body main view" not in plain
@@ -220,10 +224,11 @@ def test_the_sub_headings_a_model_writes_inside_a_section_go_too() -> None:
 
     for label in ("Outfit:", "accessories:", "colour temperature:", "apparent age:"):
         assert label not in plain
-    assert plain == (
-        "a miko, young adult, long black. white kosode and red hakama, none. "
-        "from above, cool."
-    )
+    assert plain.splitlines() == [
+        "a miko, young adult, long black.",
+        "white kosode and red hakama, none.",
+        "from above, cool.",
+    ]
 
 
 def test_stripping_labels_leaves_the_separators_readable() -> None:
