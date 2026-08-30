@@ -354,6 +354,8 @@ class WorkbenchOutputs:
     history: list[dict[str, str]]
     # Empty on the error paths, which have no result to write prose from.
     prose_prompt: str = ""
+    prose_plain: str = ""
+    prose_avoid: str = ""
 
 
 def run_workbench(
@@ -439,6 +441,8 @@ def run_workbench(
         image_description=result.image_description,
         prompts=prompt_box_values(candidates),
         prose_prompt=result.prose_prompt,
+        prose_plain=result.prose_plain,
+        prose_avoid=result.prose_avoid,
         status=status,
         candidates=candidates,
         history=updated_history,
@@ -513,9 +517,9 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.inferred_tags,
             outputs.image_description,
             *_prompt_updates(gr, outputs.prompts),
-            gr.update(
-                value=outputs.prose_prompt, visible=bool(outputs.prose_prompt)
-            ),
+            gr.update(value=outputs.prose_plain, visible=bool(outputs.prose_plain)),
+            gr.update(value=outputs.prose_avoid, visible=bool(outputs.prose_avoid)),
+            outputs.prose_prompt,
             outputs.status,
             gr.Radio(
                 choices=outputs.candidates,
@@ -646,6 +650,8 @@ def build_app(*, service: WebPromptService | None = None):
             results.inferred_tags,
             image.description,
             *results.prompts,
+            results.prose_plain,
+            results.prose_avoid,
             results.prose_prompt,
             results.status,
             results.candidate_selector,
@@ -675,6 +681,8 @@ def build_app(*, service: WebPromptService | None = None):
                 "",
                 *_prompt_updates(gr, blank_prompt_boxes()),
                 gr.update(value="", visible=False),
+                gr.update(value="", visible=False),
+                "",
                 gr.Radio(choices=[], value=None),
                 {},
                 status,
@@ -699,6 +707,8 @@ def build_app(*, service: WebPromptService | None = None):
             image.description,
             controls.base_prompt,
             *results.prompts,
+            results.prose_plain,
+            results.prose_avoid,
             results.prose_prompt,
             results.candidate_selector,
             results.action_plan,
@@ -1199,14 +1209,24 @@ def _build_result_section(gr) -> SimpleNamespace:
                             elem_id=f"prompt-part-{category}",
                         )
                     )
-    prose_prompt = gr.Textbox(
-        label="英文プロンプト",
+    # The pasteable pair comes first; the templated form is how the prose was
+    # written, which is reference material rather than something to paste.
+    prose_plain = gr.Textbox(
+        label="英文プロンプト（貼り付け用）",
         lines=4,
         buttons=["copy"],
         interactive=True,
         visible=False,
-        elem_id="prose-prompt-output",
-        info="タグを受け付けないモデル向けの、同じ内容の英文です。",
+        elem_id="prose-plain-output",
+        info="ラベルを外した本文です。そのまま画像モデルに貼り付けられます。",
+    )
+    prose_avoid = gr.Textbox(
+        label="除外（ネガティブプロンプト）",
+        lines=2,
+        buttons=["copy"],
+        interactive=True,
+        visible=False,
+        elem_id="prose-avoid-output",
     )
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
@@ -1215,7 +1235,8 @@ def _build_result_section(gr) -> SimpleNamespace:
         inferred_tags=inferred_tags,
         prompts=prompts,
         parts=parts,
-        prose_prompt=prose_prompt,
+        prose_plain=prose_plain,
+        prose_avoid=prose_avoid,
         parts_box=parts_box,
         history_state=history_state,
         status=status,
@@ -1231,9 +1252,18 @@ def _build_run_details(gr) -> SimpleNamespace:
                 label="生成候補",
             )
             adopt_button = gr.Button("選択候補を採用")
+        prose_prompt = gr.Textbox(
+            label="英文プロンプト（テンプレート形式）",
+            lines=6,
+            buttons=["copy"],
+            interactive=True,
+            elem_id="prose-prompt-output",
+            info="`Subject:` などのラベル付き。書き上がりの確認用です。",
+        )
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
         action_plan = gr.JSON(label="実行計画")
     return SimpleNamespace(
+        prose_prompt=prose_prompt,
         candidate_selector=candidate_selector,
         adopt_button=adopt_button,
         history_output=history_output,

@@ -37,7 +37,9 @@ from .scene_prompt import (
     SceneTemplate,
     build_scene_prompt,
     find_template,
+    flatten_scene_prompt,
     humanize_avoid_terms,
+    scene_avoid_line,
     load_templates,
     render_scene_prompt,
 )
@@ -313,6 +315,13 @@ class WebRunResult:
     # sentences rather than tags. Kept beside the tags rather than replacing a
     # variant: they are two readings of one result, not two results.
     prose_prompt: str = ""
+    # The same prose with the template's scaffolding removed, which is the form
+    # that goes into an image model: `Subject:` and the rest are how the prompt
+    # was written, not part of it.
+    prose_plain: str = ""
+    # The avoid terms alone. Every image model takes these separately from the
+    # description, so they travel separately here too.
+    prose_avoid: str = ""
     # Kept apart from the status so the Web UI can carry it up from a follow-up
     # run, whose status otherwise just repeats the primary run's.
     panel_note: str = ""
@@ -469,6 +478,8 @@ class WebPromptService:
                 ),
                 candidates=candidates,
                 image_description=image_description,
+                prose_plain=flatten_scene_prompt(candidates[0]),
+                prose_avoid=scene_avoid_line(candidates[0]),
             )
             _report_progress(on_progress, "complete", 1.0)
             return result
@@ -662,6 +673,8 @@ class WebPromptService:
             candidates=candidates,
             image_description=image_description,
             prose_prompt=prose_prompt,
+            prose_plain=flatten_scene_prompt(prose_prompt),
+            prose_avoid=scene_avoid_line(prose_prompt),
             panel_note=panel_note,
         )
         _report_progress(on_progress, "complete", 1.0)

@@ -143,6 +143,44 @@ def render_scene_prompt(
     return "\n".join(lines).strip()
 
 
+def flatten_scene_prompt(rendered: str) -> str:
+    """The template's contents as one paragraph, with the scaffolding gone.
+
+    `Subject:` and the rest are scaffolding for writing the prompt, not part of
+    it: an image model reads them as words. The task line and `Delivery` address
+    the model about the deliverable rather than describing the picture, and
+    `Avoid` belongs in a negative prompt, so all three stay behind in the
+    full version.
+    """
+    fragments: list[str] = []
+    for line in (rendered or "").splitlines():
+        match = SECTION_PATTERN.match(line)
+        if not match:
+            continue
+        name, value = match.group(1).strip(), match.group(2).strip()
+        if name in {DELIVERY_SECTION, AVOID_SECTION}:
+            continue
+        fragment = value.rstrip(" .,;")
+        if fragment:
+            fragments.append(fragment)
+    if not fragments:
+        return ""
+    return ". ".join(fragments) + "."
+
+
+def scene_avoid_line(rendered: str) -> str:
+    """The avoid terms on their own, for the negative prompt box they belong in.
+
+    Every image model takes these separately from the description, so leaving
+    them inside the paragraph makes the paragraph wrong.
+    """
+    for line in (rendered or "").splitlines():
+        match = SECTION_PATTERN.match(line)
+        if match and match.group(1).strip() == AVOID_SECTION:
+            return match.group(2).strip()
+    return ""
+
+
 def humanize_tags(tags: list[str]) -> list[str]:
     """Danbooru tags as words a prose model can use.
 

@@ -7,10 +7,12 @@ from danbooru_prompt_compiler.scene_prompt import (
     SceneTemplate,
     build_scene_prompt,
     find_template,
+    flatten_scene_prompt,
     humanize_avoid_terms,
     humanize_tags,
     load_templates,
     render_scene_prompt,
+    scene_avoid_line,
 )
 
 TEMPLATE = SceneTemplate(
@@ -168,3 +170,39 @@ def test_a_request_without_tags_makes_no_claim_about_observations() -> None:
 
     assert "Observed in the reference image" not in request
     assert "was detected in the reference image" not in request
+
+
+RENDERED = (
+    "Produce a character design sheet for a single character.\n"
+    "\n"
+    "Subject: a miko, long black hair\n"
+    "Clothing: white kosode and red hakama.\n"
+    "Pose: standing before a shrine\n"
+    "Delivery: One full-body main view on a plain neutral background.\n"
+    "Avoid: simple background, halftone, signature"
+)
+
+
+def test_the_pasteable_prose_drops_the_scaffolding_that_wrote_it() -> None:
+    plain = flatten_scene_prompt(RENDERED)
+
+    # `Subject:` and the rest are how the prompt was written; an image model
+    # reads them as words.
+    assert "Subject:" not in plain and "Clothing:" not in plain
+    assert plain.startswith("a miko, long black hair. white kosode and red hakama.")
+    assert "standing before a shrine." in plain
+    # The task line addresses the model about the deliverable, not the picture.
+    assert "character design sheet" not in plain
+    assert "One full-body main view" not in plain
+    # Every image model takes the negative separately, so it is not in the body.
+    assert "simple background" not in plain
+
+
+def test_the_avoid_terms_come_back_on_their_own() -> None:
+    assert scene_avoid_line(RENDERED) == "simple background, halftone, signature"
+    assert scene_avoid_line("Subject: a girl") == ""
+
+
+def test_prose_with_nothing_parseable_flattens_to_nothing() -> None:
+    assert flatten_scene_prompt("") == ""
+    assert flatten_scene_prompt("just a sentence with no sections") == ""

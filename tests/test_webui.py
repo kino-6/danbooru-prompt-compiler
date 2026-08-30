@@ -853,13 +853,18 @@ def test_the_first_prompt_box_drives_the_part_boxes() -> None:
     assert len(splitting[0]["outputs"]) == len(webui.PART_LABELS) + 1
 
 
-def test_the_prose_prompt_has_a_box_of_its_own_and_waits_for_a_run() -> None:
+def test_the_prose_arrives_ready_to_paste_with_its_negative_beside_it() -> None:
     app = build_app()
     components = _components_by_label(app)
-    props = components["英文プロンプト"]["props"]
 
-    assert "copy" in props["buttons"]
-    # A box of its own, not one of the four: tags and prose are two readings of
-    # one result rather than two results competing for the same slot.
-    assert props["visible"] is False
+    for label in ("英文プロンプト（貼り付け用）", "除外（ネガティブプロンプト）"):
+        props = components[label]["props"]
+        assert "copy" in props["buttons"], label
+        # Boxes of their own, not one of the four: tags and prose are two
+        # readings of one result rather than two results sharing a slot.
+        assert props["visible"] is False, label
+
+    # The labelled form is how the prose was written, not something to paste,
+    # so it sits behind the collapsed panel rather than on the page.
+    assert components["英文プロンプト（テンプレート形式）"]["props"]["visible"] is not False
     assert components["英文プロンプトも出す"]["props"]["value"] is True
