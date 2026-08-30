@@ -119,11 +119,14 @@ INSTRUCTION_TAG_HINTS = {
 }
 
 
-class WebRunRequest(BaseModel):
-    """Every Web UI run parameter, in the order the Gradio inputs are built."""
+class RunOptions(BaseModel):
+    """Everything one run is asked to do, declared once.
+
+    `WebRunRequest` is this plus what only the Web UI consumes, so the two stay
+    related by name rather than by a parameter list nobody can check.
+    """
 
     image_path: str | None = None
-    image_url: str = ""
     instruction: str = ""
     base_prompt: str = ""
     router_model: str = DEFAULT_ROUTER_MODEL
@@ -133,22 +136,43 @@ class WebRunRequest(BaseModel):
     character_threshold: float = 0.85
     max_image_tags: int = 50
     variants: int = 4
-    generate_next_panel: bool = True
     next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE
     next_panel_time: float = DEFAULT_NEXT_PANEL_TIME
-    scene_template: str = DEFAULT_SCENE_TEMPLATE
-    scene_model: str = DEFAULT_SCENE_MODEL
+    scene_template: str = ""
+    scene_model: str = ""
     scene_sees_image: bool = False
     next_panel_chain: bool = False
-    also_prose: bool = True
+    # Off unless asked: prose costs another model call, and a caller that wants
+    # tags should not pay for sentences it never reads. The Web UI asks for it,
+    # which is where the setting lives.
+    also_prose: bool = False
     edited_tags: str = ""
     edited_description: str = ""
     action_override: str = "auto"
-    use_vision: bool = True
+    use_vision: bool = False
     vision_model: str = DEFAULT_VISION_MODEL
-    allow_private_image_urls: bool = False
     apply_tag_exclusions: bool = True
     excluded_tags: str = DEFAULT_EXCLUSION_TEXT
+
+
+class WebRunRequest(RunOptions):
+    """Every Web UI run parameter, in the order the Gradio inputs are built.
+
+    Everything the service reads is inherited, so a new setting is declared once
+    on `RunOptions` and appears here without being written out again. What is
+    added is what only the page consumes, and the defaults that differ because
+    the page asks for things a library caller should not be charged for.
+    """
+
+    image_url: str = ""
+    generate_next_panel: bool = True
+    allow_private_image_urls: bool = False
+    # The workbench asks for prose and a description; a caller wanting tags does
+    # not, and pays for neither.
+    also_prose: bool = True
+    use_vision: bool = True
+    scene_template: str = DEFAULT_SCENE_TEMPLATE
+    scene_model: str = DEFAULT_SCENE_MODEL
 
     @classmethod
     def from_values(cls, values: Sequence[object]) -> "WebRunRequest":
@@ -304,6 +328,41 @@ def next_panel_profile(
     )
 
 
+@dataclass
+class RunContext:
+    """What every action needs before it can start: the plan, the tags, the words.
+
+    Routing, tagging and describing happen the same way whatever was asked for,
+    so they happen once and the actions read the result rather than each
+    carrying twenty parameters of their own.
+    """
+
+    routed: RoutedPlan
+    instruction: str
+    base_prompt: str
+    edited_tags: str
+    exclusion_rules: list[str]
+    image_result: ImageTagResult | None
+    image_cache_hit: bool | None
+    excluded_image_tags: list[str]
+    inferred_names: list[str]
+    inferred_text: str
+    image_description: str
+    description_cache_hit: bool | None
+    description_error: str
+
+    def status(self) -> str:
+        """The heading every action's status line starts from."""
+        return _status_text(
+            self.routed,
+            image_result=self.image_result,
+            image_cache_hit=self.image_cache_hit,
+            excluded_image_tags=self.excluded_image_tags,
+            description_cache_hit=self.description_cache_hit,
+            description_error=self.description_error,
+        )
+
+
 @dataclass(frozen=True)
 class WebRunResult:
     action_plan: dict[str, object]
@@ -357,66 +416,51 @@ class WebPromptService:
     def run(
         self,
         *,
-        image_path: str | None,
-        instruction: str,
-        base_prompt: str,
-        router_model: str = DEFAULT_ROUTER_MODEL,
-        compiler_model: str = DEFAULT_COMPILER_MODEL,
-        ollama_url: str = DEFAULT_OLLAMA_URL,
-        general_threshold: float = 0.35,
-        character_threshold: float = 0.85,
-        max_image_tags: int = 50,
-        variants: int = 4,
-        next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE,
-        next_panel_time: float = DEFAULT_NEXT_PANEL_TIME,
-        scene_template: str = "",
-        scene_model: str = "",
-        scene_sees_image: bool = False,
-        next_panel_chain: bool = False,
-        # Off unless asked: prose costs another model call, and a caller that
-        # wants tags should not pay for sentences it never reads. The Web UI
-        # asks for it, which is where the setting lives.
-        also_prose: bool = False,
-        edited_tags: str = "",
-        edited_description: str = "",
-        action_override: str = "auto",
-        use_vision: bool = False,
-        vision_model: str = DEFAULT_VISION_MODEL,
-        apply_tag_exclusions: bool = True,
-        excluded_tags: str = DEFAULT_EXCLUSION_TEXT,
         on_progress: ProgressCallback | None = None,
+        **options: object,
     ) -> WebRunResult:
-        clean_instruction = (instruction or "").strip()
-        clean_base_prompt = (base_prompt or "").strip()
-        clean_edited_tags = (edited_tags or "").strip()
+        """One run, described by `RunOptions` rather than by a parameter list.
+
+        The options were twenty-seven parameters repeating what `RunOptions`
+        already declares, so every new setting had to be written out three times
+        and could be left out of any of them without a word from anything.
+        """
+        run_options = RunOptions(**options)
+        clean_instruction = (run_options.instruction or "").strip()
+        clean_base_prompt = (run_options.base_prompt or "").strip()
+        clean_edited_tags = (run_options.edited_tags or "").strip()
         exclusion_rules = (
-            parse_exclusion_rules(excluded_tags) if apply_tag_exclusions else []
+            parse_exclusion_rules(run_options.excluded_tags)
+            if run_options.apply_tag_exclusions
+            else []
         )
-        if not image_path and not clean_instruction and not clean_base_prompt and not clean_edited_tags:
+        if not run_options.image_path and not clean_instruction and not clean_base_prompt and not clean_edited_tags:
             raise ValueError("画像、指示、または既存プロンプトを入力してください。")
         route_request = RouteRequest(
             instruction=clean_instruction,
             base_prompt=clean_base_prompt,
-            has_image=bool(image_path),
-            default_variants=variants,
+            has_image=bool(run_options.image_path),
+            default_variants=run_options.variants,
         )
         _report_progress(on_progress, "routing", 0.05)
-        if action_override == "auto":
-            router = self.router_factory(ollama_url, router_model)
+        if run_options.action_override == "auto":
+            router = self.router_factory(
+                run_options.ollama_url, run_options.router_model
+            )
             routed = router.route(route_request)
         else:
             routed = _manual_route(
-                action_override,
+                run_options.action_override,
                 instruction=clean_instruction,
-                variants=variants,
+                variants=run_options.variants,
             )
 
         _report_progress(on_progress, "tagging", 0.2)
         image_result, image_cache_hit = self._tag_image(
-            image_path,
-            general_threshold=general_threshold,
-            character_threshold=character_threshold,
-            max_image_tags=max_image_tags,
+            run_options.image_path,
+            general_threshold=run_options.general_threshold,
+            character_threshold=run_options.character_threshold,
+            max_image_tags=run_options.max_image_tags,
         )
         excluded_image_tags: list[str] = []
         if image_result and exclusion_rules:
@@ -432,118 +476,78 @@ class WebPromptService:
 
         # A hand-written description always wins, so the user can correct or
         # sharpen what the VLM saw and re-run without paying for it again.
-        image_description = (edited_description or "").strip()
+        image_description = (run_options.edited_description or "").strip()
         description_cache_hit: bool | None = None
         description_error = ""
-        if use_vision and image_path and not image_description:
+        if run_options.use_vision and run_options.image_path and not image_description:
             _report_progress(on_progress, "vision", 0.4)
             try:
                 image_description, description_cache_hit = self._describe_image(
-                    image_path,
-                    ollama_url=ollama_url,
-                    vision_model=vision_model,
+                    run_options.image_path,
+                    ollama_url=run_options.ollama_url,
+                    vision_model=run_options.vision_model,
                 )
             except Exception as exc:
                 # The description is an aid, so a missing or broken vision model
                 # must not take the prompt generation down with it.
-                description_error = f"{vision_model}: {exc}"
+                description_error = f"{run_options.vision_model}: {exc}"
+
+        context = RunContext(
+            routed=routed,
+            instruction=clean_instruction,
+            base_prompt=clean_base_prompt,
+            edited_tags=clean_edited_tags,
+            exclusion_rules=exclusion_rules,
+            image_result=image_result,
+            image_cache_hit=image_cache_hit,
+            excluded_image_tags=excluded_image_tags,
+            inferred_names=inferred_names,
+            inferred_text=inferred_text,
+            image_description=image_description,
+            description_cache_hit=description_cache_hit,
+            description_error=description_error,
+        )
 
         if routed.plan.action == WebAction.scene_prompt:
-            _report_progress(on_progress, "compilation", 0.7)
-            candidates = self._compose_scene_prompts(
-                scene_template,
-                instruction=clean_instruction,
-                base_prompt=clean_base_prompt,
-                image_tags=inferred_names,
-                image_description=image_description,
-                exclusion_rules=exclusion_rules,
-                excluded_image_tags=excluded_image_tags,
-                variants=variants,
-                ollama_url=ollama_url,
-                scene_model=scene_model or compiler_model,
-                image_path=image_path if scene_sees_image else "",
-            )
-            result = WebRunResult(
-                action_plan=_plan_dict(routed),
-                inferred_tags=inferred_text,
-                output="\n\n".join(
-                    _render_candidate(index, candidate, multiple=len(candidates) > 1)
-                    for index, candidate in enumerate(candidates, start=1)
-                ),
-                status=_status_text(
-                    routed,
-                    image_result=image_result,
-                    image_cache_hit=image_cache_hit,
-                    excluded_image_tags=excluded_image_tags,
-                    description_cache_hit=description_cache_hit,
-                    description_error=description_error,
-                ),
-                candidates=candidates,
-                image_description=image_description,
-                prose_plain=flatten_scene_prompt(candidates[0]),
-                prose_avoid=scene_avoid_line(candidates[0]),
-            )
-            _report_progress(on_progress, "complete", 1.0)
-            return result
-
+            return self._run_scene_prompt(run_options, context, on_progress)
         if routed.plan.action == WebAction.verify_tags:
-            if not image_path:
-                raise ValueError("タグ確認には画像をアップロードしてください。")
-            if not inferred_names:
-                raise ValueError("確認するタグがありません。先にタグを推測してください。")
-            _report_progress(on_progress, "vision", 0.7)
-            review, review_error = self._review_image_tags(
-                image_path,
-                tags=inferred_names,
-                image_description=image_description,
-                # Hand-typed tags are a statement about the image, not a guess
-                # for the model to overrule.
-                protected=normalize_tags(parse_tag_text(clean_edited_tags)),
-                ollama_url=ollama_url,
-                vision_model=vision_model,
-            )
-            reviewed_text = ", ".join(review.tags)
-            status = _status_text(
-                routed,
-                image_result=image_result,
-                image_cache_hit=image_cache_hit,
-                excluded_image_tags=excluded_image_tags,
-                description_cache_hit=description_cache_hit,
-                description_error=description_error,
-            )
-            status += "\n\n" + _review_status(review, review_error, vision_model)
-            result = WebRunResult(
-                action_plan=_plan_dict(routed),
-                inferred_tags=reviewed_text,
-                output=format_variant(review.tags, OutputFormat.grouped),
-                status=status,
-                candidates=[reviewed_text],
-                image_description=image_description,
-            )
-            _report_progress(on_progress, "complete", 1.0)
-            return result
-
+            return self._run_tag_review(run_options, context, on_progress)
         if routed.plan.action == WebAction.tag_image:
-            if not inferred_names:
-                raise ValueError("画像タグ抽出には画像をアップロードしてください。")
-            output = format_variant(inferred_names, OutputFormat.grouped)
-            result = WebRunResult(
-                action_plan=_plan_dict(routed),
-                inferred_tags=inferred_text,
-                output=output,
-                status=_status_text(
-                    routed,
-                    image_result=image_result,
-                    image_cache_hit=image_cache_hit,
-                    excluded_image_tags=excluded_image_tags,
-                    description_cache_hit=description_cache_hit,
-                    description_error=description_error,
-                ),
-                candidates=[format_clipboard_text(inferred_names, OutputFormat.grouped)],
-                image_description=image_description,
-            )
-            _report_progress(on_progress, "complete", 1.0)
-            return result
+            return self._run_tag_image(context, on_progress)
+        return self._run_prompt(run_options, context, on_progress)
+
+    def _run_prompt(
+        self,
+        options: "RunOptions",
+        context: RunContext,
+        on_progress: ProgressCallback | None,
+    ) -> WebRunResult:
+        """A prompt of tags: a new one, an edit, or the panel after this one."""
+        routed = context.routed
+        clean_instruction = context.instruction
+        clean_base_prompt = context.base_prompt
+        inferred_names = context.inferred_names
+        inferred_text = context.inferred_text
+        exclusion_rules = context.exclusion_rules
+        excluded_image_tags = context.excluded_image_tags
+        image_result = context.image_result
+        image_cache_hit = context.image_cache_hit
+        image_description = context.image_description
+        description_cache_hit = context.description_cache_hit
+        description_error = context.description_error
+        image_path = options.image_path
+        ollama_url = options.ollama_url
+        compiler_model = options.compiler_model
+        scene_model = options.scene_model
+        scene_template = options.scene_template
+        scene_sees_image = options.scene_sees_image
+        variants = options.variants
+        next_panel_change = options.next_panel_change
+        next_panel_time = options.next_panel_time
+        next_panel_chain = options.next_panel_chain
+        vision_model = options.vision_model
+        also_prose = options.also_prose
+
 
         # A new prompt is built from the instruction alone, so an image
         # description would contradict what the user asked for.
@@ -679,6 +683,100 @@ class WebPromptService:
             prose_plain=flatten_scene_prompt(prose_prompt),
             prose_avoid=scene_avoid_line(prose_prompt),
             panel_note=panel_note,
+        )
+        _report_progress(on_progress, "complete", 1.0)
+        return result
+
+    def _run_scene_prompt(
+        self,
+        options: "RunOptions",
+        context: RunContext,
+        on_progress: ProgressCallback | None,
+    ) -> WebRunResult:
+        """Prose instead of tags, in the shape the chosen template asks for."""
+        _report_progress(on_progress, "compilation", 0.7)
+        candidates = self._compose_scene_prompts(
+            options.scene_template,
+            instruction=context.instruction,
+            base_prompt=context.base_prompt,
+            image_tags=context.inferred_names,
+            image_description=context.image_description,
+            exclusion_rules=context.exclusion_rules,
+            excluded_image_tags=context.excluded_image_tags,
+            variants=options.variants,
+            ollama_url=options.ollama_url,
+            scene_model=options.scene_model or options.compiler_model,
+            image_path=options.image_path if options.scene_sees_image else "",
+        )
+        result = WebRunResult(
+            action_plan=_plan_dict(context.routed),
+            inferred_tags=context.inferred_text,
+            output="\n\n".join(
+                _render_candidate(index, candidate, multiple=len(candidates) > 1)
+                for index, candidate in enumerate(candidates, start=1)
+            ),
+            status=context.status(),
+            candidates=candidates,
+            image_description=context.image_description,
+            prose_plain=flatten_scene_prompt(candidates[0]),
+            prose_avoid=scene_avoid_line(candidates[0]),
+        )
+        _report_progress(on_progress, "complete", 1.0)
+        return result
+
+    def _run_tag_review(
+        self,
+        options: "RunOptions",
+        context: RunContext,
+        on_progress: ProgressCallback | None,
+    ) -> WebRunResult:
+        """The vision model's verdict on the tags the tagger produced."""
+        if not options.image_path:
+            raise ValueError("タグ確認には画像をアップロードしてください。")
+        if not context.inferred_names:
+            raise ValueError("確認するタグがありません。先にタグを推測してください。")
+        _report_progress(on_progress, "vision", 0.7)
+        review, review_error = self._review_image_tags(
+            options.image_path,
+            tags=context.inferred_names,
+            image_description=context.image_description,
+            # Hand-typed tags are a statement about the image, not a guess for
+            # the model to overrule.
+            protected=normalize_tags(parse_tag_text(context.edited_tags)),
+            ollama_url=options.ollama_url,
+            vision_model=options.vision_model,
+        )
+        reviewed_text = ", ".join(review.tags)
+        status = context.status()
+        status += "\n\n" + _review_status(review, review_error, options.vision_model)
+        result = WebRunResult(
+            action_plan=_plan_dict(context.routed),
+            inferred_tags=reviewed_text,
+            output=format_variant(review.tags, OutputFormat.grouped),
+            status=status,
+            candidates=[reviewed_text],
+            image_description=context.image_description,
+        )
+        _report_progress(on_progress, "complete", 1.0)
+        return result
+
+    def _run_tag_image(
+        self,
+        context: RunContext,
+        on_progress: ProgressCallback | None,
+    ) -> WebRunResult:
+        """The tagger's own answer, with no model asked about it."""
+        if not context.inferred_names:
+            raise ValueError("画像タグ抽出には画像をアップロードしてください。")
+        result = WebRunResult(
+            action_plan=_plan_dict(context.routed),
+            inferred_tags=context.inferred_text,
+            output=format_variant(context.inferred_names, OutputFormat.grouped),
+            status=context.status(),
+            candidates=[
+                format_clipboard_text(context.inferred_names, OutputFormat.grouped)
+            ],
+            image_description=context.image_description,
         )
         _report_progress(on_progress, "complete", 1.0)
         return result
