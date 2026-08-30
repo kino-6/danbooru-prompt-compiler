@@ -513,7 +513,7 @@ class WebPromptService:
         if routed.plan.action == WebAction.verify_tags:
             return self._run_tag_review(run_options, context, on_progress)
         if routed.plan.action == WebAction.tag_image:
-            return self._run_tag_image(context, on_progress)
+            return self._run_tag_image(run_options, context, on_progress)
         return self._run_prompt(run_options, context, on_progress)
 
     def _run_prompt(
@@ -647,27 +647,13 @@ class WebPromptService:
             description_cache_hit=description_cache_hit,
             description_error=description_error,
         )
-        # Newer image models take sentences, so the same result is offered both
-        # ways. A prose step that fails costs the prose, never the tags.
         prose_prompt = ""
-        if also_prose and output_variants:
-            _report_progress(on_progress, "compilation", 0.9)
-            try:
-                prose_prompt = self._compose_scene_prompts(
-                    scene_template,
-                    instruction=clean_instruction,
-                    base_prompt=clean_base_prompt,
-                    image_tags=output_variants[0],
-                    image_description=image_description,
-                    exclusion_rules=exclusion_rules,
-                    excluded_image_tags=excluded_image_tags,
-                    variants=1,
-                    ollama_url=ollama_url,
-                    scene_model=scene_model or compiler_model,
-                    image_path=image_path if scene_sees_image else "",
-                )[0]
-            except Exception as exc:
-                status += f"\n\n英文プロンプトを生成できませんでした: {exc}"
+        if output_variants:
+            prose_prompt, prose_error = self._compose_prose(
+                options, context, output_variants[0], on_progress
+            )
+            if prose_error:
+                status += f"\n\n{prose_error}"
         if panel_note:
             status += f"\n\n{panel_note}"
         if unknown_tags:
@@ -686,6 +672,41 @@ class WebPromptService:
         )
         _report_progress(on_progress, "complete", 1.0)
         return result
+
+    def _compose_prose(
+        self,
+        options: "RunOptions",
+        context: RunContext,
+        tags: list[str],
+        on_progress: ProgressCallback | None,
+    ) -> tuple[str, str]:
+        """The same result as English prose, and why it is missing if it is.
+
+        Newer image models take sentences, so a tag run can carry both. A prose
+        step that fails costs the prose, never the tags.
+        """
+        if not options.also_prose or not tags:
+            return "", ""
+        _report_progress(on_progress, "compilation", 0.9)
+        try:
+            return (
+                self._compose_scene_prompts(
+                    options.scene_template,
+                    instruction=context.instruction,
+                    base_prompt=context.base_prompt,
+                    image_tags=tags,
+                    image_description=context.image_description,
+                    exclusion_rules=context.exclusion_rules,
+                    excluded_image_tags=context.excluded_image_tags,
+                    variants=1,
+                    ollama_url=options.ollama_url,
+                    scene_model=options.scene_model or options.compiler_model,
+                    image_path=options.image_path if options.scene_sees_image else "",
+                )[0],
+                "",
+            )
+        except Exception as exc:
+            return "", f"英文プロンプトを生成できませんでした: {exc}"
 
     def _run_scene_prompt(
         self,
@@ -762,17 +783,32 @@ class WebPromptService:
 
     def _run_tag_image(
         self,
+        options: "RunOptions",
         context: RunContext,
         on_progress: ProgressCallback | None,
     ) -> WebRunResult:
-        """The tagger's own answer, with no model asked about it."""
+        """The tagger's own answer, with no model asked to rewrite it.
+
+        The prose still runs when it is asked for: dropping an image and
+        pressing 実行 is the commonest run there is, and it produced no English
+        at all however that setting was left.
+        """
         if not context.inferred_names:
             raise ValueError("画像タグ抽出には画像をアップロードしてください。")
+        prose_prompt, prose_error = self._compose_prose(
+            options, context, context.inferred_names, on_progress
+        )
+        status = context.status()
+        if prose_error:
+            status += f"\n\n{prose_error}"
         result = WebRunResult(
             action_plan=_plan_dict(context.routed),
             inferred_tags=context.inferred_text,
             output=format_variant(context.inferred_names, OutputFormat.grouped),
-            status=context.status(),
+            status=status,
+            prose_prompt=prose_prompt,
+            prose_plain=flatten_scene_prompt(prose_prompt),
+            prose_avoid=scene_avoid_line(prose_prompt),
             candidates=[
                 format_clipboard_text(context.inferred_names, OutputFormat.grouped)
             ],

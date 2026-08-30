@@ -249,3 +249,43 @@ def test_prose_without_sub_headings_is_left_alone() -> None:
     plain = flatten_scene_prompt("Subject: a young elf girl with a bow, standing in profile")
 
     assert plain == "a young elf girl with a bow, standing in profile."
+
+
+def test_a_section_that_repeats_another_is_not_printed_twice() -> None:
+    # A small model fills every section with the whole picture rather than its
+    # own aspect, so seven sections came back as the same sentence seven times.
+    plain = flatten_scene_prompt(
+        "Subject: an elf girl, holding a bow, standing, looking at the viewer\n"
+        "Clothing: a simple tunic, holding a bow, standing\n"
+        "Pose: standing, looking at the viewer, one foot forward"
+    )
+
+    assert plain.splitlines() == [
+        "an elf girl, holding a bow, standing, looking at the viewer.",
+        "a simple tunic.",
+        "one foot forward.",
+    ]
+
+
+def test_a_section_with_nothing_new_to_say_is_dropped_entirely() -> None:
+    plain = flatten_scene_prompt(
+        "Subject: an elf girl, standing\n"
+        "Clothing: an elf girl, standing\n"
+        "Pose: kneeling"
+    )
+
+    assert plain.splitlines() == ["an elf girl, standing.", "kneeling."]
+
+
+def test_the_request_asks_each_section_to_stay_in_its_lane() -> None:
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=["1girl"],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=[],
+    )
+
+    assert "Each section covers its own aspect and nothing else" in request
+    assert "Never repeat in one section what another section has already said" in request

@@ -106,6 +106,8 @@ def build_scene_prompt(
             "using the format `Section: content`.",
             "Write plain English sentence fragments, not tag lists, and describe "
             "only what should be visible in the image.",
+            "Each section covers its own aspect and nothing else. Never repeat "
+            "in one section what another section has already said.",
             "Base every section on the reference material; do not invent a "
             "different character, setting, or outfit.",
             "Do not add sections, headings, numbering, markdown, or commentary.",
@@ -173,7 +175,31 @@ def flatten_scene_prompt(rendered: str) -> str:
         fragment = _strip_inline_labels(value).rstrip(" .,;")
         if fragment:
             fragments.append(fragment)
-    return "\n".join(f"{fragment}." for fragment in fragments)
+    return "\n".join(f"{fragment}." for fragment in _drop_repeats(fragments))
+
+
+def _drop_repeats(fragments: list[str]) -> list[str]:
+    """Say each thing once.
+
+    A small model fills every section with the whole picture rather than its own
+    aspect, so seven sections come back as the same sentence seven times and the
+    pasteable prose is mostly repetition. Clauses already said are dropped, and
+    a section left with nothing to add goes with them.
+    """
+    kept: list[str] = []
+    seen: set[str] = set()
+    for fragment in fragments:
+        clauses: list[str] = []
+        for clause in fragment.split(","):
+            clause = clause.strip()
+            key = clause.lower().rstrip(".")
+            if not clause or key in seen:
+                continue
+            seen.add(key)
+            clauses.append(clause)
+        if clauses:
+            kept.append(", ".join(clauses))
+    return kept
 
 
 def _strip_inline_labels(value: str) -> str:
