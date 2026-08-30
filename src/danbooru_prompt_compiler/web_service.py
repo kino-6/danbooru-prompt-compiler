@@ -69,6 +69,20 @@ VISION_MODEL_CHOICES: tuple[tuple[str, str], ...] = (
 # Prose is harder than tag lists, so this is the one step worth pointing at a
 # larger local model without slowing tag generation down.
 DEFAULT_SCENE_MODEL = DEFAULT_COMPILER_MODEL
+# The text steps - routing, tag generation, prose - all take the same kind of
+# model, so they share one list. Size is the whole trade, so the labels carry
+# it. Anything else pulled locally still works: the dropdowns accept a typed
+# name, and the connection check reports one that is not installed.
+TEXT_MODEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("qwen3:1.7b — 軽量・既定（1.4GB）", "qwen3:1.7b"),
+    ("qwen3:8b — 英文向け・中量（5.2GB）", "qwen3:8b"),
+    ("unseen-gemma4:26b — 無検閲・大型（17GB）", "unseen-gemma4:26b"),
+)
+# The prose step alone may defer to whatever tag generation is using.
+SCENE_MODEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("プロンプト生成モデルと同じ", ""),
+    *TEXT_MODEL_CHOICES,
+)
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 IMAGE_DESCRIPTION_PROMPT = (
     "/no_think\n"

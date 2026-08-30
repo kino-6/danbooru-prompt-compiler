@@ -745,3 +745,44 @@ def test_controls_the_default_task_cannot_use_start_hidden() -> None:
     assert components["自然文プロンプトのテンプレート"]["props"]["visible"] is False
     assert components["自然文プロンプト用モデル"]["props"]["visible"] is not False
     assert components["どうしたい？"]["props"]["visible"] is not False
+
+
+def test_every_model_field_is_a_dropdown_that_still_takes_a_typed_name() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    labels = [
+        "指示ルーターモデル",
+        "プロンプト生成モデル",
+        "自然文プロンプト用モデル",
+        "VLMモデル",
+    ]
+
+    for label in labels:
+        props = components[label]["props"]
+        # A model name is a thing you pick, not a thing you spell from memory -
+        # but any other pulled model has to remain reachable.
+        assert props["allow_custom_value"] is True, label
+        assert props["choices"], label
+
+    text_models = [
+        value for _label, value in components["プロンプト生成モデル"]["props"]["choices"]
+    ]
+    assert text_models == ["qwen3:1.7b", "qwen3:8b", "unseen-gemma4:26b"]
+    assert (
+        components["指示ルーターモデル"]["props"]["choices"]
+        == components["プロンプト生成モデル"]["props"]["choices"]
+    )
+
+
+def test_the_prose_model_can_defer_to_the_prompt_generation_model() -> None:
+    app = build_app()
+    choices = _components_by_label(app)["自然文プロンプト用モデル"]["props"]["choices"]
+
+    # The empty value is the documented "reuse the compiler model" case, so it
+    # needs a name in the list rather than an empty box the reader must guess at.
+    assert choices[0] == ("プロンプト生成モデルと同じ", "")
+    assert [value for _label, value in choices[1:]] == [
+        "qwen3:1.7b",
+        "qwen3:8b",
+        "unseen-gemma4:26b",
+    ]

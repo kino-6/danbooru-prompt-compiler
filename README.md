@@ -176,7 +176,9 @@ already on it, so a proposal like `hand_drawn` is reported as rejected rather th
 you typed by hand are never removed, and a vision model that fails leaves the list untouched with
 the reason in the status line.
 
-`VLMモデル` in the advanced settings is a dropdown over the models in [Local Model Environment](#local-model-environment), labelled with their size and whether they are uncensored, and it still accepts any other pulled model typed straight into it. The connection check adds up what the current selection weighs and says so when it will not all stay resident - it names the heaviest model, since that is the one deciding what gets evicted, and a swap costs a full reload on every run.
+Every model field in the advanced settings is a dropdown over the models in [Local Model Environment](#local-model-environment) that still accepts any other pulled model typed straight into it - a model name is something to pick, not to spell from memory. `指示ルーターモデル`, `プロンプト生成モデル` and `自然文プロンプト用モデル` share one list, since the text steps all take the same kind of model; the prose one adds `プロンプト生成モデルと同じ`, which is the empty value that reuses whatever tag generation is set to.
+
+`VLMモデル` is a dropdown over the same section, labelled with their size and whether they are uncensored. The connection check adds up what the current selection weighs and says so when it will not all stay resident - it names the heaviest model, since that is the one deciding what gets evicted, and a swap costs a full reload on every run.
 
 ### Running the vision steps
 

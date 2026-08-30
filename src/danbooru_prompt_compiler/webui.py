@@ -24,6 +24,8 @@ from .web_service import (
     DEFAULT_SCENE_MODEL,
     DEFAULT_SCENE_TEMPLATE,
     DEFAULT_VISION_MODEL,
+    SCENE_MODEL_CHOICES,
+    TEXT_MODEL_CHOICES,
     VISION_MODEL_CHOICES,
     WEB_RUN_FIELDS,
     ProgressCallback,
@@ -904,12 +906,16 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
     """Folded models, diagnostics, tagging thresholds, and exclusion words."""
     with gr.Accordion("詳細設定", open=False):
         with gr.Row():
-            router_model = gr.Textbox(
+            router_model = gr.Dropdown(
+                choices=list(TEXT_MODEL_CHOICES),
                 value=DEFAULT_ROUTER_MODEL,
+                allow_custom_value=True,
                 label="指示ルーターモデル",
             )
-            compiler_model = gr.Textbox(
+            compiler_model = gr.Dropdown(
+                choices=list(TEXT_MODEL_CHOICES),
                 value=DEFAULT_COMPILER_MODEL,
+                allow_custom_value=True,
                 label="プロンプト生成モデル",
             )
             ollama_url = gr.Textbox(
@@ -927,14 +933,13 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
                 ),
             )
         with gr.Group(visible=False) as scene_settings_box:
-            scene_model = gr.Textbox(
+            scene_model = gr.Dropdown(
+                choices=list(SCENE_MODEL_CHOICES),
                 value=DEFAULT_SCENE_MODEL,
+                allow_custom_value=True,
                 label="自然文プロンプト用モデル",
                 elem_id="scene-model-input",
-                info=(
-                    "英文の作文はタグ生成より重い処理です。"
-                    "ここだけ大きめのローカルモデルにできます。空欄ならプロンプト生成モデルを使います。"
-                ),
+                info="英文の作文はタグ生成より重いので、ここだけ大きめにできます。",
             )
             scene_sees_image = gr.Checkbox(
                 value=False,
