@@ -825,6 +825,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "generate_next_panel": controls.generate_next_panel,
         "next_panel_change": controls.next_panel_change,
         "next_panel_time": controls.next_panel_time,
+        "next_panel_chain": controls.next_panel_chain,
         "scene_template": controls.scene_template,
         "scene_model": settings.scene_model,
         "scene_sees_image": settings.scene_sees_image,
@@ -959,6 +960,11 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
                 label="経過する時間",
                 elem_id="next-panel-time",
             )
+            next_panel_chain = gr.Checkbox(
+                value=remembered(stored, "next_panel_chain", False),
+                label="1コマずつ進める",
+                elem_id="next-panel-chain",
+            )
             next_panel_change = gr.Slider(
                 0.0,
                 1.0,
@@ -1009,6 +1015,7 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
         also_prose=also_prose,
         next_panel_change=next_panel_change,
         next_panel_time=next_panel_time,
+        next_panel_chain=next_panel_chain,
         next_panel_box=next_panel_box,
         scene_template=scene_template,
         scene_prompt_button=scene_prompt_button,

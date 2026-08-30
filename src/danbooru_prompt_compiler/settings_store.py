@@ -28,6 +28,7 @@ REMEMBERED_FIELDS: tuple[str, ...] = (
     "generate_next_panel",
     "next_panel_change",
     "next_panel_time",
+    "next_panel_chain",
     "scene_template",
     "scene_model",
     "scene_sees_image",

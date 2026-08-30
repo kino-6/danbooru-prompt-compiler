@@ -139,6 +139,7 @@ class WebRunRequest(BaseModel):
     scene_template: str = DEFAULT_SCENE_TEMPLATE
     scene_model: str = DEFAULT_SCENE_MODEL
     scene_sees_image: bool = False
+    next_panel_chain: bool = False
     also_prose: bool = True
     edited_tags: str = ""
     edited_description: str = ""
@@ -371,6 +372,7 @@ class WebPromptService:
         scene_template: str = "",
         scene_model: str = "",
         scene_sees_image: bool = False,
+        next_panel_chain: bool = False,
         # Off unless asked: prose costs another model call, and a caller that
         # wants tags should not pay for sentences it never reads. The Web UI
         # asks for it, which is where the setting lives.
@@ -573,6 +575,7 @@ class WebPromptService:
                     ollama_url=ollama_url,
                     vision_model=vision_model,
                     text_model=scene_model or compiler_model,
+                    chain=next_panel_chain,
                 )
             except Exception as exc:
                 panel_variants = None
@@ -743,14 +746,32 @@ class WebPromptService:
         ollama_url: str,
         vision_model: str,
         text_model: str,
+        chain: bool = False,
     ) -> tuple[list[list[str]], str]:
-        """Panels for the moment after this one, and what to say about them.
+        """Panels after this one, and what to say about them.
 
         With a picture the vision model answers, because it can see where the
         body already is. With only a prompt the text model answers the same
         question from the tags, which is worth doing: the dictionary bound
         catches what a small model invents rather than letting it through.
+
+        ``chain`` asks for a sequence instead of alternatives: each panel is the
+        input to the next, so the boxes read as a storyboard rather than as
+        several guesses at one moment.
         """
+        if chain:
+            return self._propose_panel_chain(
+                image_path,
+                tags=tags,
+                image_description=image_description,
+                instruction=instruction,
+                change=change,
+                moment=moment,
+                steps=variants,
+                ollama_url=ollama_url,
+                vision_model=vision_model,
+                text_model=text_model,
+            )
         profile = next_panel_profile(change, moment)
         protected = protected_tags(tags, profile.preserve)
         request = build_next_panel_request(
@@ -820,6 +841,50 @@ class WebPromptService:
         if lines:
             note = "{}\n\n{}".format(note, "\n".join(lines))
         return panels, note
+
+    def _propose_panel_chain(
+        self,
+        image_path: str,
+        *,
+        tags: list[str],
+        image_description: str,
+        instruction: str,
+        change: float,
+        moment: float,
+        steps: int,
+        ollama_url: str,
+        vision_model: str,
+        text_model: str,
+    ) -> tuple[list[list[str]], str]:
+        """A sequence, each panel asked for from the one before it."""
+        panels: list[list[str]] = []
+        notes: list[str] = []
+        current = tags
+        for step in range(max(steps, 1)):
+            # Only the first step has a picture of where things stand; after
+            # that the picture shows a moment already passed, and the tags are
+            # the only honest account of where the character is.
+            step_panels, note = self._propose_next_panels(
+                image_path if step == 0 else "",
+                tags=current,
+                image_description=image_description if step == 0 else "",
+                instruction=instruction,
+                change=change,
+                moment=moment,
+                variants=1,
+                ollama_url=ollama_url,
+                vision_model=vision_model,
+                # A chain that began with a picture keeps the model that saw it.
+                # Falling back to the prose model would quietly hand the rest of
+                # the sequence to a smaller one that invents tags.
+                text_model=vision_model if image_path else text_model,
+            )
+            current = step_panels[0]
+            panels.append(current)
+            body = note.split("\n\n", 1)[-1].lstrip("- ").strip()
+            notes.append(f"{step + 1}コマ目: {body}" if body else f"{step + 1}コマ目")
+        listed = "\n".join(f"- {note}" for note in notes)
+        return panels, f"次のコマ: {len(panels)}コマを順に生成しました。\n\n{listed}"
 
     def known_tags(self) -> set[str]:
         """The Danbooru dictionary, read once and only when something asks."""

@@ -137,6 +137,8 @@ Everything it proposes is bounded the same way the tag review is: additions must
 
 The status line names what each panel actually moved - `-holding_bow_(weapon), looking_at_viewer / +drawing_bow, aiming` - beside the sentence describing it. One tag changing inside a list of twenty-five reads as no change at all otherwise, which is exactly how it read before the diff was printed. Asking for several panels at once also raises the temperature to a floor of 0.5 whatever the time slider says: three boxes holding the same panel are worth one box.
 
+`1コマずつ進める` makes the boxes a sequence instead of alternatives: each panel becomes the input to the next, so four boxes read as a storyboard rather than four guesses at one moment. It costs one model call per panel instead of one for all of them. Only the first step can use the picture - after that the picture shows a moment that has already passed, and the tags are the only honest account of where the character is - but a chain that began with a picture keeps the model that saw it rather than handing the rest of the sequence to a smaller one.
+
 A picture is not required. With `既存プロンプト` filled in and no image, the same question goes to the prose model instead, and the dictionary bound does the same work - a small model asked this invents `bow_drawn` and `action_draw`, and they are refused rather than passed on.
 
 What you type in `どうしたい？` is passed to the request as the panel you want, and outranks everything the sliders say - `振り返らせて` produces `looking_back`, `膝をついて座らせて` produces `kneeling` and takes `standing` away. This is the reliable way to steer a panel; the sliders only say how far it may go.

@@ -1251,3 +1251,51 @@ def test_prose_is_not_written_unless_it_is_asked_for() -> None:
     )
 
     assert result.prose_prompt == ""
+
+
+def test_a_chained_run_feeds_each_panel_into_the_next() -> None:
+    class SteppingVision:
+        """Answers differently each call, and records what it was shown."""
+
+        def __init__(self) -> None:
+            self.seen: list[list[str]] = []
+            self.images: list[list[str]] = []
+            self.step = 0
+
+        def generate(self, request):
+            self.images.append(list(request.image_paths))
+            self.seen.append(request.prompt)
+            self.step += 1
+            if self.step == 1:
+                return LLMResponse(
+                    outputs=["Next: she draws.\nRemove: holding_bow_(weapon)\nAdd: drawing_bow"]
+                )
+            return LLMResponse(outputs=["Next: she looses it.\nRemove: drawing_bow\nAdd: aiming"])
+
+    client = SteppingVision()
+    # A chain that began with a picture keeps the model that saw it, so the same
+    # double answers both steps.
+    service = _panel_service(client, text_factory=lambda _url, _model: client)
+
+    result = service.run(
+        **_panel_options(action_override="next_panel", variants=2, next_panel_chain=True)
+    )
+
+    # Panel two is asked for from panel one, not from the original.
+    assert "drawing_bow" in client.seen[1]
+    assert "holding_bow_(weapon)" not in client.seen[1]
+    # Only the first step has a picture; after that it shows a moment gone by.
+    assert client.images == [["sample.png"], []]
+    assert "aiming" in result.candidates[1]
+    assert "drawing_bow" not in result.candidates[1]
+    assert "2コマを順に生成しました" in result.panel_note
+    assert "1コマ目:" in result.panel_note and "2コマ目:" in result.panel_note
+
+
+def test_without_chaining_the_panels_stay_alternatives_for_one_moment() -> None:
+    client = ReviewingVisionClient("Next: she draws.\nRemove: none\nAdd: drawing_bow")
+    service = _panel_service(client)
+
+    result = service.run(**_panel_options(action_override="next_panel", variants=2))
+
+    assert "コマ目" not in result.panel_note
