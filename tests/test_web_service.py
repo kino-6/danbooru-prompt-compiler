@@ -1073,3 +1073,86 @@ def test_supplied_values_still_win_over_the_defaults() -> None:
 
     assert request.instruction == "夜にして"
     assert request.variants == 2
+
+
+def test_the_panel_note_names_what_actually_changed() -> None:
+    vision_client = ReviewingVisionClient(
+        "Next: she draws the bow.\n"
+        "Remove: holding_bow_(weapon), looking_at_viewer\n"
+        "Add: drawing_bow, aiming"
+    )
+    service = _panel_service(vision_client)
+
+    result = service.run(**_panel_options(action_override="next_panel"))
+
+    # One tag changing inside a list of twenty-five reads as no change at all,
+    # so the note says which tags moved rather than leaving it to be spotted.
+    assert "she draws the bow." in result.panel_note
+    assert "-holding_bow_(weapon), looking_at_viewer" in result.panel_note
+    assert "+drawing_bow, aiming" in result.panel_note
+
+
+def test_the_note_travels_beside_the_status_so_a_follow_up_can_carry_it() -> None:
+    vision_client = ReviewingVisionClient("Next: she draws.\nRemove: none\nAdd: aiming")
+    service = _panel_service(vision_client)
+
+    result = service.run(**_panel_options(action_override="next_panel"))
+
+    assert result.panel_note
+    assert result.panel_note in result.status
+
+
+def test_asking_for_several_panels_at_once_will_not_take_the_same_one_twice() -> None:
+    class RecordingVision:
+        def __init__(self) -> None:
+            self.temperatures: list[float | None] = []
+
+        def generate(self, request):
+            self.temperatures.append(request.temperature)
+            return LLMResponse(outputs=["Remove: none\nAdd: aiming"] * request.variants)
+
+    client = RecordingVision()
+    service = _panel_service(client)
+
+    # The deterministic time band would otherwise fill three boxes identically.
+    service.run(**_panel_options(action_override="next_panel", variants=3, next_panel_time=0.1))
+    assert client.temperatures[-1] >= 0.5
+
+    service.run(**_panel_options(action_override="next_panel", variants=1, next_panel_time=0.1))
+    assert client.temperatures[-1] == 0.0
+
+
+def test_a_next_panel_can_come_from_a_prompt_with_no_image_at_all() -> None:
+    text_client = ReviewingVisionClient(
+        "Next: she looses the arrow.\n"
+        "Remove: holding_bow_(weapon)\n"
+        "Add: aiming"
+    )
+    service = WebPromptService(
+        tagger=PanelTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.next_panel)
+        ),
+        # No picture, so the vision model must not be the one asked.
+        vision_factory=lambda _url, _model: (_ for _ in ()).throw(
+            AssertionError("no image means no vision model")
+        ),
+        text_factory=lambda _url, _model: text_client,
+        known_tags=PANEL_DICTIONARY,
+    )
+
+    result = service.run(
+        image_path=None,
+        instruction="",
+        base_prompt="1girl, long_hair, standing, holding_bow_(weapon)",
+        variants=1,
+        use_vision=False,
+    )
+
+    assert text_client.last_request.image_paths == []
+    # Without a picture the request must not claim there is one attached.
+    assert "These tags describe the current panel" in text_client.last_request.prompt
+    assert "attached image" not in text_client.last_request.prompt
+    assert "aiming" in result.output
+    assert "holding_bow_(weapon)" not in result.output
+    assert "she looses the arrow." in result.panel_note

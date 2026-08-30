@@ -135,6 +135,10 @@ Those two pulls are the light setup and are enough to use every feature. Swappin
 
 Everything it proposes is bounded the same way the tag review is: additions must exist in `data/tags.json`, removals must name a tag already on the list, and the aspects the change slider holds fixed cannot be removed at all. The sentence it wrote appears in the status line, since it says what the panel is meant to be and the tag list only implies it.
 
+The status line names what each panel actually moved - `-holding_bow_(weapon), looking_at_viewer / +drawing_bow, aiming` - beside the sentence describing it. One tag changing inside a list of twenty-five reads as no change at all otherwise, which is exactly how it read before the diff was printed. Asking for several panels at once also raises the temperature to a floor of 0.5 whatever the time slider says: three boxes holding the same panel are worth one box.
+
+A picture is not required. With `既存プロンプト` filled in and no image, the same question goes to the prose model instead, and the dictionary bound does the same work - a small model asked this invents `bow_drawn` and `action_draw`, and they are refused rather than passed on.
+
 A proposal whose pose and framing match the panel it came from is not a next panel. The status line says how many came back unmoved rather than handing them over quietly. If the vision model is missing or fails, the run falls back to the old tag-only path with the reason in the status line.
 
 The model sometimes answers in the right shape without the labels - the sentence, the removals and the additions as three bare lines - and the content is exactly right when it does. Those are relabelled rather than discarded: measured, discarding them threw away the best proposals of the set, including the only one that reached `aiming, drawing_bow` at that setting.

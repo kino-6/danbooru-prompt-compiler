@@ -57,11 +57,17 @@ def build_next_panel_request(
     movement: str,
     latitude: str,
     protected: list[str],
+    sees_image: bool = True,
 ) -> str:
     """Ask what changes in the next instant, in names rather than prose."""
     parts = [
-        "The attached image is the current panel of a sequence. Decide what the "
-        "very next instant looks like: the same character, a moment later.",
+        (
+            "The attached image is the current panel of a sequence."
+            if sees_image
+            else "These tags describe the current panel of a sequence."
+        )
+        + " Decide what the very next instant looks like: the same character, "
+        "a moment later.",
         "",
         f"Tags of the current panel: {', '.join(tags)}",
         _labelled("Description of the current panel", description),
@@ -81,7 +87,7 @@ def build_next_panel_request(
         "turning - the next instant is the next stage of that action, so name "
         "that stage. A change of gaze or expression on its own is not a next "
         "panel: say what the hands and the body do. Choose something the body "
-        "in the image could physically reach from where it is now. Use "
+        "in the picture could physically reach from where it is now. Use "
         "canonical Danbooru spelling with underscores, and never name the "
         "passage of time itself.",
     ]

@@ -64,8 +64,11 @@ TASK_FIELDS: dict[str, frozenset[str]] = {
     "edit": frozenset(
         {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
     ),
+    # base_prompt earns its place here: a next panel can be asked for from a
+    # prompt alone, with no picture at all.
     "next_panel": frozenset(
-        {"vision", "instruction", "panel_change", "variants", "next_panel"}
+        {"vision", "instruction", "base_prompt", "panel_change", "variants",
+         "next_panel"}
     ),
     "scene_prompt": frozenset(
         {"vision", "instruction", "base_prompt", "variants", "scene_template",
@@ -414,6 +417,12 @@ def run_workbench(
     status = result.status
     if follow_up is not None:
         status += f"\n\n次のコマ: {len(follow_up.candidates)}件"
+        # Only what the follow-up learned about the panels is worth carrying up;
+        # the rest of its status just repeats what is already above. Without
+        # this the sentence the model wrote about each panel was thrown away,
+        # and the run looked like it had explained nothing.
+        if follow_up.panel_note:
+            status += f"\n\n{follow_up.panel_note}"
     elif follow_up_error:
         status += f"\n\n次のコマの生成に失敗: {follow_up_error}"
     updated_history = prepend_history(
