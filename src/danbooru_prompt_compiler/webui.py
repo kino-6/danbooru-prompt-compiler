@@ -42,42 +42,67 @@ web_app = typer.Typer(help="Launch the local Danbooru Prompt Workbench web UI.")
 # What the user is trying to do, asked first. Everything the answer cannot reach
 # is hidden, because a control that does nothing for the selected task is worse
 # than a missing one: it invites a setting that will be silently ignored.
-TASK_CHOICES: tuple[tuple[str, str], ...] = (
-    ("おまかせ（指示から判断）", "auto"),
-    ("画像からタグを抽出", "tag_image"),
-    ("テキストからプロンプト", "compile"),
-    ("既存プロンプトを編集", "edit"),
-    ("次のコマ", "next_panel"),
-    ("自然文プロンプト", "scene_prompt"),
-    ("タグをVLMで確認", "verify_tags"),
-)
-# Group names per task. A name absent here is hidden for that task; the image
-# workspace, the results, and the advanced settings are never toggled.
-TASK_FIELDS: dict[str, frozenset[str]] = {
-    "auto": frozenset(
-        {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
-         "variants", "run", "next_panel"}
+@dataclass(frozen=True)
+class Task:
+    """One entry in the task selector, and everything that follows from it."""
+
+    action: str
+    label: str
+    fields: frozenset[str]
+
+
+# One definition per task, so a new one cannot be added to the selector without
+# saying what it shows - the choices and the visibility map are both read from
+# here rather than kept in step by hand.
+TASKS: tuple[Task, ...] = (
+    Task(
+        "auto",
+        "おまかせ（指示から判断）",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
+             "variants", "run", "next_panel"}
+        ),
     ),
     # Tagging is pure ONNX: no instruction to give, no model to describe with.
-    "tag_image": frozenset({"run"}),
-    "compile": frozenset({"instruction", "follow_up", "variants", "run"}),
-    "edit": frozenset(
-        {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
+    Task("tag_image", "画像からタグを抽出", frozenset({"run"})),
+    Task(
+        "compile",
+        "テキストからプロンプト",
+        frozenset({"instruction", "follow_up", "variants", "run"}),
+    ),
+    Task(
+        "edit",
+        "既存プロンプトを編集",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
+        ),
     ),
     # base_prompt earns its place here: a next panel can be asked for from a
     # prompt alone, with no picture at all.
-    "next_panel": frozenset(
-        {"vision", "instruction", "base_prompt", "panel_change", "variants",
-         "next_panel"}
+    Task(
+        "next_panel",
+        "次のコマ",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "panel_change", "variants",
+             "next_panel"}
+        ),
     ),
-    "scene_prompt": frozenset(
-        {"vision", "instruction", "base_prompt", "variants", "scene_template",
-         "scene_settings", "scene_prompt"}
+    Task(
+        "scene_prompt",
+        "自然文プロンプト",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "variants", "scene_template",
+             "scene_settings", "scene_prompt"}
+        ),
     ),
     # The review reads the description as context but takes no instruction, and
     # it answers with one list rather than a number of variants.
-    "verify_tags": frozenset({"vision", "run"}),
-}
+    Task("verify_tags", "タグをVLMで確認", frozenset({"vision", "run"})),
+)
+TASK_CHOICES: tuple[tuple[str, str], ...] = tuple(
+    (task.label, task.action) for task in TASKS
+)
+TASK_FIELDS: dict[str, frozenset[str]] = {task.action: task.fields for task in TASKS}
 # The order the visibility updates are returned in, so the wiring and the
 # outputs list cannot drift apart.
 TASK_FIELD_ORDER: tuple[str, ...] = (
