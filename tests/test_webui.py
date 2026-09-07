@@ -255,12 +255,120 @@ def test_run_workbench_turns_failures_into_a_status_and_keeps_history() -> None:
     assert outputs.history == history
 
 
+class SweepService:
+    """A service that answers each situation with its own name."""
+
+    def __init__(self, fails: set[str] | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.fails = fails or set()
+
+    def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
+        self.calls.append({"image_path": image_path, **options})
+        situation = str(options.get("situation", ""))
+        if situation in self.fails:
+            raise RuntimeError(f"{situation} は失敗しました")
+        return WebRunResult(
+            action_plan={"action": "compile"},
+            inferred_tags="",
+            output=f"tags for {situation}",
+            status="ok",
+            candidates=[f"tags for {situation}"],
+            prose_plain=f"prose for {situation}",
+            prose_avoid="simple background",
+        )
+
+
+SWEEP_LABELS = {"battle": "戦闘", "rest": "休息", "travel": "移動"}
+
+
+def test_a_sweep_runs_every_chosen_situation_and_keeps_them_apart() -> None:
+    service = SweepService()
+
+    runs = webui.run_situation_sweep(
+        service, ["battle", "rest", "travel"], SWEEP_LABELS
+    )
+
+    assert [run.name for run in runs] == ["battle", "rest", "travel"]
+    assert [run.prompt for run in runs] == [
+        "tags for battle",
+        "tags for rest",
+        "tags for travel",
+    ]
+    assert [call["situation"] for call in service.calls] == [
+        "battle",
+        "rest",
+        "travel",
+    ]
+    # Nothing but the situation differs, or the boxes would not be comparable.
+    assert {call["instruction"] for call in service.calls} == {""}
+    assert {call["variants"] for call in service.calls} == {1}
+
+
+def test_a_sweep_carries_the_shared_subject_into_every_situation() -> None:
+    service = SweepService()
+
+    webui.run_situation_sweep(
+        service, ["battle", "rest"], SWEEP_LABELS, instruction="弓を持ったエルフ"
+    )
+
+    assert {call["instruction"] for call in service.calls} == {"弓を持ったエルフ"}
+
+
+def test_a_sweep_asks_for_prose_when_prose_was_chosen() -> None:
+    service = SweepService()
+
+    runs = webui.run_situation_sweep(
+        service, ["battle"], SWEEP_LABELS, as_prose=True
+    )
+
+    assert service.calls[0]["action_override"] == "scene_prompt"
+    assert runs[0].prompt == "prose for battle"
+
+
+def test_one_failed_situation_does_not_lose_the_others() -> None:
+    service = SweepService(fails={"rest"})
+
+    runs = webui.run_situation_sweep(
+        service, ["battle", "rest", "travel"], SWEEP_LABELS
+    )
+
+    assert [bool(run.error) for run in runs] == [False, True, False]
+    assert runs[0].prompt and runs[2].prompt
+    assert "失敗" in runs[1].error
+
+
+def test_a_sweep_says_which_situation_it_is_on() -> None:
+    service = SweepService()
+    stages: list[str] = []
+
+    webui.run_situation_sweep(
+        service,
+        ["battle", "rest"],
+        SWEEP_LABELS,
+        on_progress=lambda stage, _fraction: stages.append(stage),
+    )
+
+    # The name, not a number: six runs in a row is long enough that "which one
+    # is it on" is a real question.
+    assert "戦闘" in stages[0]
+    assert "休息" in stages[1]
+
+
+def test_a_sweep_ignores_situations_it_has_no_label_for() -> None:
+    service = SweepService()
+
+    runs = webui.run_situation_sweep(service, ["battle", "unknown"], SWEEP_LABELS)
+
+    assert [run.name for run in runs] == ["battle"]
+
+
 gradio = pytest.importorskip("gradio")
 
 from danbooru_prompt_compiler.tag_filter import (  # noqa: E402
     DEFAULT_EXCLUSION_TEXT,
     load_exclusion_text,
 )
+from danbooru_prompt_compiler.situation import load_situations  # noqa: E402
 from danbooru_prompt_compiler.webui import (  # noqa: E402
     accept_dropped_image,
     adopt_candidate,
@@ -571,11 +679,16 @@ def test_webui_has_cancel_dependencies_for_every_run_trigger() -> None:
         dependency["id"]
         for dependency in app.config["dependencies"]
         if dependency.get("api_name")
-        in {"run_prompt_workbench", "run_next_panel", "run_scene_prompt"}
+        in {
+            "run_prompt_workbench",
+            "run_next_panel",
+            "run_scene_prompt",
+            "run_situation_sweep",
+        }
         or (dependency.get("targets") and dependency.get("trigger") == "submit")
     }
-    # 実行, 次のコマ, 自然文プロンプト, and instruction submit.
-    assert len(cancelled_ids) == 4
+    # 実行, 次のコマ, 自然文プロンプト, instruction submit, and まとめて生成.
+    assert len(cancelled_ids) == 5
     assert run_ids <= cancelled_ids
 
 
@@ -911,3 +1024,44 @@ def test_the_progress_stages_the_service_reports_all_have_labels() -> None:
 
     assert reported, "no progress reports found in the service"
     assert reported <= set(webui.PROGRESS_LABELS)
+
+
+def test_the_situation_tab_offers_every_situation_at_once() -> None:
+    app = build_app()
+    picker = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-picker"
+    )
+    labels = {label for label, _value in picker["props"]["choices"]}
+
+    # A checkbox group, not a dropdown: the point of the tab is asking for
+    # several at once.
+    assert picker["type"] == "checkboxgroup"
+    assert {"戦闘", "休息・くつろぎ"} <= labels
+    assert picker["props"]["value"] == []
+
+
+def test_the_situation_tab_has_a_box_for_every_situation_on_disk() -> None:
+    app = build_app()
+    boxes = [
+        component
+        for component in app.config["components"]
+        if str(component["props"].get("elem_id", "")).startswith("situation-output-")
+    ]
+
+    assert len(boxes) == webui.MAX_SITUATION_SLOTS
+    assert webui.MAX_SITUATION_SLOTS >= len(load_situations())
+    assert all(box["props"]["visible"] is False for box in boxes)
+
+
+def test_the_situation_template_only_appears_for_prose() -> None:
+    app = build_app()
+    template = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-template"
+    )
+
+    # Tags are the default, and a prose template means nothing to them.
+    assert template["props"]["visible"] is False

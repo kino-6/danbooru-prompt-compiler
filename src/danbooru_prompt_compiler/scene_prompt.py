@@ -98,7 +98,7 @@ def build_scene_prompt(
         _labelled("User request", instruction),
         # Last of the known material, because it is the weakest claim on the
         # scene: it says what is happening, never who it happens to.
-        _labelled("Situation to depict", situation_guidance),
+        _situation_request(situation_guidance),
     ]
     return "\n".join(
         part
@@ -139,6 +139,7 @@ def render_scene_prompt(
     template: SceneTemplate,
     *,
     avoid_terms: list[str],
+    situation_guidance: str = "",
 ) -> str:
     """Force the model's answer back into the template's shape.
 
@@ -148,7 +149,7 @@ def render_scene_prompt(
     filled = _parse_sections(raw_output)
     lines = [template.task, ""]
     for name, guidance in template.sections:
-        value = filled.get(name.lower())
+        value = _without_echoed_guidance(filled.get(name.lower()), situation_guidance)
         # A section answered with its own guidance is not answered. Dropping it
         # leaves an honest gap rather than printing the question as the answer.
         if value and not _is_echo(value, guidance):
@@ -268,6 +269,70 @@ def humanize_avoid_terms(terms: list[str]) -> list[str]:
         if cleaned and cleaned not in humanized:
             humanized.append(cleaned)
     return humanized
+
+
+# A phrase has to be this long before removing it counts as removing an echo
+# rather than removing ordinary English.
+ECHO_PHRASE_WORDS = 3
+
+
+def _guidance_phrases(guidance: str) -> list[str]:
+    """The direction broken into the pieces a model copies it in.
+
+    It is copied clause by clause, not whole, so whole-string comparison never
+    catches it: "off duty and unguarded, sitting or lying down, weight let go"
+    is three of these in a row inside a sentence of the model's own.
+    """
+    phrases = []
+    for piece in re.split(r"[,;:.]", guidance or ""):
+        piece = " ".join(piece.split()).strip()
+        if len(piece.split()) >= ECHO_PHRASE_WORDS:
+            phrases.append(piece)
+    # Longest first, so a phrase inside another phrase cannot strand its tail.
+    return sorted(phrases, key=len, reverse=True)
+
+
+def _without_echoed_guidance(value: str | None, guidance: str) -> str:
+    """A section with the direction's own wording taken back out.
+
+    Asking the model not to copy the direction works most of the time, which is
+    not good enough: the same sweep produced "A silver-haired elf with a bow."
+    on one run and that same subject followed by the entire direction on the
+    next. Removal is done here so the answer does not depend on the dice.
+    """
+    value = (value or "").strip()
+    if not value or not guidance:
+        return value
+    stripped = value
+    for phrase in _guidance_phrases(guidance):
+        stripped = re.sub(re.escape(phrase), "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*([,;])\s*(?=[,;.])", "", stripped)
+    stripped = re.sub(r"\s{2,}", " ", stripped).strip(" ,;")
+    stripped = re.sub(r"\s+([,;.])", r"", stripped)
+    if stripped and not stripped.endswith("."):
+        stripped += "."
+    # A section that was nothing but the direction has no answer left in it, and
+    # the model's words are better than a fragment of them.
+    return stripped if len(stripped.split()) >= ECHO_PHRASE_WORDS else value
+
+
+def _situation_request(guidance: str) -> str:
+    """The situation, named as a direction rather than as words to reuse.
+
+    Written as a plain labelled value it came straight back: asked for a
+    resting elf the model answered "off duty and unguarded, sitting or lying
+    down, weight let go, gear set aside, a drink or a book to hand" - the
+    direction itself, alternatives and all, instead of one picture of it. So it
+    is introduced the way the template sections are, as something to realise.
+    """
+    guidance = (guidance or "").strip()
+    if not guidance:
+        return ""
+    return (
+        "Situation to depict. This is a direction, not wording to reuse: choose "
+        "one concrete version of it - one posture, one place, one thing in hand "
+        "- and describe that. Never write these words back.\n" + guidance
+    )
 
 
 def _is_echo(value: str, guidance: str) -> bool:

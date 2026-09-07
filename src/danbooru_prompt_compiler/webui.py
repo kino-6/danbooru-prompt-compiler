@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +141,9 @@ PROGRESS_LABELS = {
     "complete": "完了",
 }
 MAX_HISTORY_ITEMS = 20
+# Enough boxes for every situation on disk, with room for a few more before the
+# page has to be thought about again.
+MAX_SITUATION_SLOTS = 8
 MAX_OUTPUT_VARIANTS = 4
 # Prompt boxes 2-4 hold the next-panel proposals that follow box 1.
 NEXT_PANEL_SLOTS = MAX_OUTPUT_VARIANTS - 1
@@ -515,6 +519,114 @@ def _prompt_updates(gr, prompts: list[str]):
     return [gr.update(value=value, visible=bool(value)) for value in prompts]
 
 
+@dataclass(frozen=True)
+class SituationRun:
+    """One situation's answer in a sweep, kept whole or with its failure.
+
+    A sweep is several model calls in a row, so a situation that fails must not
+    take the ones beside it with it: the failure is carried here and shown in
+    that situation's own box.
+    """
+
+    name: str
+    label: str
+    prompt: str = ""
+    avoid: str = ""
+    error: str = ""
+
+
+def run_situation_sweep(
+    service: WebPromptService,
+    situations: Sequence[str],
+    labels: Mapping[str, str],
+    *,
+    instruction: str = "",
+    as_prose: bool = False,
+    options: Mapping[str, object] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> list[SituationRun]:
+    """One prompt per situation: the same subject through several moments.
+
+    The point of asking for more than one is comparison - the same character
+    eating breakfast, mid-fight, and halfway through a sentence - so the runs
+    are identical but for the situation, and each keeps its own box.
+    """
+    chosen = [name for name in situations if name in labels]
+    shared = dict(options or {})
+    runs: list[SituationRun] = []
+    for index, name in enumerate(chosen):
+        label = labels[name]
+        # Named rather than numbered: six runs in a row is long enough that
+        # "which one is it on" is a real question.
+        if on_progress is not None:
+            on_progress(
+                f"「{label}」を生成しています（{index + 1}/{len(chosen)}）",
+                index / len(chosen),
+            )
+        try:
+            result = service.run(
+                image_path=None,
+                situation=name,
+                instruction=instruction,
+                action_override="scene_prompt" if as_prose else "compile",
+                variants=1,
+                use_vision=False,
+                **shared,
+            )
+        except Exception as exc:
+            runs.append(
+                SituationRun(
+                    name,
+                    label,
+                    error=format_ollama_error(
+                        exc,
+                        [
+                            str(shared.get("compiler_model", "")),
+                            str(shared.get("scene_model", "")),
+                        ],
+                    ),
+                )
+            )
+            continue
+        prompt = result.prose_plain if as_prose else ""
+        if not prompt:
+            prompt = result.candidates[0] if result.candidates else ""
+        runs.append(
+            SituationRun(name, label, prompt=prompt, avoid=result.prose_avoid or "")
+        )
+    return runs
+
+
+def _situation_updates(gr, runs: list[SituationRun]):
+    """One box per situation, named by it, hidden where there is nothing."""
+    updates = []
+    for index in range(MAX_SITUATION_SLOTS):
+        if index >= len(runs):
+            updates.append(gr.update(value="", visible=False))
+            continue
+        run = runs[index]
+        # A failed situation still gets its box: which one failed is the whole
+        # of the answer, and an empty slot would not say.
+        updates.append(
+            gr.update(
+                label=run.label if not run.error else f"{run.label}（失敗）",
+                value=run.prompt or run.error,
+                visible=True,
+            )
+        )
+    return updates
+
+
+def _situation_summary(gr, runs: list[SituationRun]):
+    """The shared avoid list, and what the sweep managed."""
+    avoid = next((run.avoid for run in runs if run.avoid), "")
+    failed = [run.label for run in runs if run.error]
+    summary = f"{len(runs) - len(failed)}件を生成しました。"
+    if failed:
+        summary += "失敗: " + "、".join(failed)
+    return [gr.update(value=avoid, visible=bool(avoid)), summary]
+
+
 def build_app(*, service: WebPromptService | None = None):
     try:
         import gradio as gr
@@ -576,16 +688,25 @@ def build_app(*, service: WebPromptService | None = None):
         # missing instruction as a request for plain tag extraction.
         return dispatch(values, progress, action_override="next_panel")
 
+    situations = load_situations()
+
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
-        task = _build_task_selector(gr, stored)
-        with gr.Row():
-            image = _build_image_column(gr, stored)
-            controls = _build_instruction_column(gr, stored)
-        results = _build_result_section(gr)
-        with gr.Row():
-            settings = _build_advanced_settings(gr, stored)
-            results = SimpleNamespace(**vars(results), **vars(_build_run_details(gr)))
+        with gr.Tabs():
+            # The workbench is first and opens by default: the situation sweep
+            # is one thing you might want, not the way in.
+            with gr.Tab("ワークベンチ", elem_id="workbench-tab"):
+                task = _build_task_selector(gr, stored)
+                with gr.Row():
+                    image = _build_image_column(gr, stored)
+                    controls = _build_instruction_column(gr, stored)
+                results = _build_result_section(gr)
+                with gr.Row():
+                    settings = _build_advanced_settings(gr, stored)
+                    results = SimpleNamespace(
+                        **vars(results), **vars(_build_run_details(gr))
+                    )
+            sweep = _build_situation_tab(gr, situations)
 
         # A field name can own more than one component - a button and the hint
         # that explains it have to appear and disappear together.
@@ -833,6 +954,85 @@ def build_app(*, service: WebPromptService | None = None):
         controls.cancel_button.click(
             fn=None,
             cancels=[run_event, next_panel_event, scene_prompt_event, submit_event],
+            queue=False,
+        )
+
+        def handle_situation_sweep(progress=gr.Progress(), *values):
+            (
+                picked,
+                subject,
+                style,
+                template,
+                ollama_url,
+                compiler_model,
+                scene_model,
+                gpu_wait_gb,
+                apply_tag_exclusions,
+                excluded_tags,
+            ) = values
+            chosen = list(picked or [])[:MAX_SITUATION_SLOTS]
+            if not chosen:
+                return [
+                    *(gr.update(value="", visible=False) for _ in sweep.boxes),
+                    gr.update(value="", visible=False),
+                    "シチュエーションを1つ以上選んでください。",
+                ]
+            runs = run_situation_sweep(
+                prompt_service,
+                chosen,
+                {item.name: item.label for item in situations},
+                instruction=(subject or "").strip(),
+                as_prose=style == "prose",
+                options={
+                    "ollama_url": ollama_url,
+                    "compiler_model": compiler_model,
+                    "scene_model": scene_model or compiler_model,
+                    "scene_template": template,
+                    "gpu_wait_gb": gpu_wait_gb,
+                    "apply_tag_exclusions": apply_tag_exclusions,
+                    "excluded_tags": excluded_tags,
+                },
+                on_progress=lambda stage, fraction: progress(
+                    fraction, desc=PROGRESS_LABELS.get(stage, stage)
+                ),
+            )
+            return [
+                *_situation_updates(gr, runs),
+                *_situation_summary(gr, runs),
+            ]
+
+        situation_event = sweep.run_button.click(
+            handle_situation_sweep,
+            inputs=[
+                sweep.picked,
+                sweep.subject,
+                sweep.output_style,
+                sweep.template,
+                settings.ollama_url,
+                settings.compiler_model,
+                settings.scene_model,
+                settings.gpu_wait_gb,
+                settings.apply_tag_exclusions,
+                settings.excluded_tags,
+            ],
+            outputs=[*sweep.boxes, sweep.avoid, sweep.status],
+            api_name="run_situation_sweep",
+            concurrency_limit=1,
+        )
+        sweep.cancel_button.click(
+            fn=None, cancels=[situation_event], queue=False
+        )
+        sweep.select_all_button.click(
+            lambda: gr.update(value=[item.name for item in situations]),
+            outputs=sweep.picked,
+            queue=False,
+        )
+        # The template only shapes prose, so it is only asked for when prose is
+        # what was chosen.
+        sweep.output_style.change(
+            lambda style: gr.update(visible=style == "prose"),
+            inputs=sweep.output_style,
+            outputs=sweep.template,
             queue=False,
         )
         demo.load(
@@ -1224,6 +1424,102 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
         save_excluded_tags_button=save_excluded_tags_button,
         reset_excluded_tags_button=reset_excluded_tags_button,
         excluded_tags_status=excluded_tags_status,
+    )
+
+
+def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
+    """One subject through several situations, side by side.
+
+    A situation on its own is already enough to generate from, and the reason to
+    ask for one is almost always to see it against the others - the same
+    character eating breakfast, mid-fight, and halfway through a sentence. That
+    needs neither an image nor a router, so it gets its own tab rather than
+    another mode of the workbench, and none of the controls that do not apply.
+    """
+    with gr.Tab("シチュエーション比較", elem_id="situation-tab"):
+        gr.Markdown(
+            "選んだシチュエーションごとにプロンプトを1件ずつ作ります。"
+            "画像は使いません。"
+        )
+        with gr.Row():
+            subject = gr.Textbox(
+                label="共通の主題（任意）",
+                placeholder="例: 弓を持った銀髪のエルフ",
+                lines=2,
+                elem_id="situation-subject",
+                info="すべてのシチュエーションで共通の人物・場面。"
+                "空欄ならシチュエーションだけで生成します。",
+            )
+            with gr.Column():
+                output_style = gr.Radio(
+                    choices=[("タグ", "tags"), ("自然文", "prose")],
+                    value="tags",
+                    label="出力形式",
+                    elem_id="situation-style",
+                )
+                template = gr.Dropdown(
+                    choices=[(item.label, item.name) for item in load_templates()],
+                    value=DEFAULT_SCENE_TEMPLATE,
+                    label="自然文プロンプトのテンプレート",
+                    visible=False,
+                    elem_id="situation-template",
+                )
+        picked = gr.CheckboxGroup(
+            choices=[(item.label, item.name) for item in situations],
+            value=[],
+            label="シチュエーション（複数選択可）",
+            elem_id="situation-picker",
+        )
+        # Equal widths made 停止 as prominent as 生成; the action being asked for
+        # gets the room, and the two around it get what they need.
+        with gr.Row():
+            select_all_button = gr.Button("すべて選択", scale=1)
+            run_button = gr.Button(
+                "まとめて生成", variant="primary", scale=3, elem_id="situation-run"
+            )
+            # A sweep is one model call per situation, so it runs long enough
+            # that leaving without a way to stop it would be its own bug.
+            cancel_button = gr.Button(
+                "停止", variant="stop", scale=1, elem_id="situation-cancel"
+            )
+        # One box per situation, named at run time by the situation it holds.
+        # Two to a row, like the prompt boxes on the workbench.
+        boxes = []
+        for start in range(0, MAX_SITUATION_SLOTS, 2):
+            with gr.Row():
+                for slot in range(start, start + 2):
+                    boxes.append(
+                        gr.Textbox(
+                            label="",
+                            lines=6,
+                            buttons=["copy"],
+                            interactive=True,
+                            visible=False,
+                            elem_id=f"situation-output-{slot + 1}",
+                        )
+                    )
+        # Shared rather than one per box: the avoid list comes from the
+        # exclusion rules, so it is the same for every situation in the sweep.
+        avoid = gr.Textbox(
+            label="除外（ネガティブプロンプト）",
+            lines=2,
+            buttons=["copy"],
+            interactive=True,
+            visible=False,
+            elem_id="situation-avoid",
+        )
+        status = gr.Markdown(elem_id="situation-status")
+    return SimpleNamespace(
+        subject=subject,
+        output_style=output_style,
+        template=template,
+        picked=picked,
+        select_all_button=select_all_button,
+        run_button=run_button,
+        cancel_button=cancel_button,
+        boxes=boxes,
+        avoid=avoid,
+        status=status,
     )
 
 

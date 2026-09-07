@@ -328,3 +328,90 @@ def test_the_request_says_the_guidance_is_not_an_answer() -> None:
     )
 
     assert "they are not an answer and must never be written back" in request
+
+
+def test_the_situation_is_given_as_a_direction_not_as_words_to_reuse() -> None:
+    """A resting scene came back as the direction itself, options and all.
+
+    "off duty and unguarded, sitting or lying down, weight let go, gear set
+    aside, a drink or a book to hand" is the instruction, not a picture: the
+    model has to choose one version of it, the way it does for the sections.
+    """
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=[],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=[],
+        situation_guidance="Off duty and unguarded: a drink or a book to hand.",
+    )
+
+    assert "Off duty and unguarded: a drink or a book to hand." in request
+    assert "Never write these words back." in request
+    assert "choose one concrete version" in request
+
+
+def test_no_situation_adds_nothing_to_the_request() -> None:
+    request = build_scene_prompt(
+        TEMPLATE,
+        image_tags=["1girl"],
+        image_description="",
+        instruction="",
+        base_prompt="",
+        avoid_terms=[],
+    )
+
+    assert "Situation to depict" not in request
+
+
+REST_GUIDANCE = (
+    "Off duty and unguarded: sitting or lying down, weight let go, "
+    "gear set aside, a drink or a book to hand."
+)
+
+
+def test_a_section_that_copied_the_direction_keeps_only_its_own_words() -> None:
+    """Asking the model not to copy works most of the time, which is not enough.
+
+    The same sweep answered "A silver-haired elf with a bow." on one run and
+    that subject followed by the whole direction on the next, so the direction
+    is taken back out rather than left to the dice.
+    """
+    rendered = render_scene_prompt(
+        "Subject: A silver-haired elf with a bow, off duty and unguarded, "
+        "sitting or lying down, weight let go, gear set aside, a drink or a "
+        "book to hand.",
+        TEMPLATE,
+        avoid_terms=[],
+        situation_guidance=REST_GUIDANCE,
+    )
+
+    assert "Subject: A silver-haired elf with a bow." in rendered
+    assert "weight let go" not in rendered
+    assert "gear set aside" not in rendered
+
+
+def test_the_model_s_own_realisation_of_the_direction_survives() -> None:
+    rendered = render_scene_prompt(
+        "Subject: The elf is lying down on a weathered bench with a book open.",
+        TEMPLATE,
+        avoid_terms=[],
+        situation_guidance=REST_GUIDANCE,
+    )
+
+    # "lying down on a weathered bench" is the picture the direction asked for,
+    # not the direction: scrubbing it would be the bug, not the fix.
+    assert "lying down on a weathered bench with a book open" in rendered
+
+
+def test_a_section_left_with_nothing_keeps_what_the_model_wrote() -> None:
+    rendered = render_scene_prompt(
+        "Subject: Off duty and unguarded.",
+        TEMPLATE,
+        avoid_terms=[],
+        situation_guidance=REST_GUIDANCE,
+    )
+
+    # An empty section says less than an echoed one; a fragment says least.
+    assert "Subject: Off duty and unguarded." in rendered

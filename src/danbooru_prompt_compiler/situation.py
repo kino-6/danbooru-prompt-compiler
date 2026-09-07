@@ -64,8 +64,17 @@ def situation_choices(situations: list[Situation]) -> list[tuple[str, str]]:
     ]
 
 
-def situation_direction(situation: Situation | None) -> str:
-    """The words a situation adds to whatever the run was already asked to do."""
+def situation_direction(
+    situation: Situation | None, *, with_tags: bool = True
+) -> str:
+    """The words a situation adds to whatever the run was already asked to do.
+
+    ``with_tags`` is for the prose side. The reference tags are addressed to the
+    tag compiler, which weighs them against the dictionary; a prose model has no
+    such filter and simply writes them down, so a resting elf came back as
+    "off duty and unguarded, sitting, closed eyes, smile, indoors" - a tag list
+    in a sentence. Prose gets the direction alone.
+    """
     if situation is None:
         return ""
     # "Make it a scene of this situation" is an instruction to replace, and it
@@ -75,7 +84,7 @@ def situation_direction(situation: Situation | None) -> str:
         "状況の指定。人物・外見・服装・場所は変えず、"
         "「何をしているか」だけをこれに合わせる: " + situation.guidance.strip()
     ]
-    if situation.tags:
+    if situation.tags and with_tags:
         # Candidates rather than requirements: the scene decides which of them
         # are true, and the dictionary decides whether they may be written.
         lines.append(

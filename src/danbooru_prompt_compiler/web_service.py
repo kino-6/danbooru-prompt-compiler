@@ -362,6 +362,9 @@ class RunContext:
     # because the router writes its own scene description over that, and the
     # direction would go with it.
     situation: str
+    # The same direction without its reference tags, for the prose side: a prose
+    # model writes a tag list down rather than weighing it.
+    situation_prose: str
     base_prompt: str
     edited_tags: str
     exclusion_rules: list[str]
@@ -554,6 +557,7 @@ class WebPromptService:
             routed=routed,
             instruction=clean_instruction,
             situation=situation_direction(situation),
+            situation_prose=situation_direction(situation, with_tags=False),
             base_prompt=clean_base_prompt,
             edited_tags=clean_edited_tags,
             exclusion_rules=exclusion_rules,
@@ -789,7 +793,7 @@ class WebPromptService:
             ollama_url=options.ollama_url,
             scene_model=options.scene_model or options.compiler_model,
             situation_guidance=_subordinate(
-                context.situation, context.instruction or context.base_prompt
+                context.situation_prose, context.instruction or context.base_prompt
             ),
             image_path=options.image_path if options.scene_sees_image else "",
         )
@@ -935,7 +939,12 @@ class WebPromptService:
             )
         )
         return [
-            render_scene_prompt(output, template, avoid_terms=avoid_terms)
+            render_scene_prompt(
+                output,
+                template,
+                avoid_terms=avoid_terms,
+                situation_guidance=situation_guidance,
+            )
             for output in response.outputs
         ]
 

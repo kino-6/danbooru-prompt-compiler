@@ -72,3 +72,26 @@ def test_the_direction_says_what_it_governs_before_it_says_anything_else() -> No
 
 def test_no_situation_adds_nothing_at_all() -> None:
     assert situation_direction(None) == ""
+
+
+def test_prose_gets_the_direction_without_the_reference_tags() -> None:
+    """A prose model writes a tag list down rather than weighing it.
+
+    The reference tags are addressed to the tag compiler, which checks them
+    against the dictionary. Handed to the prose model they came out verbatim:
+    "off duty and unguarded, sitting, closed eyes, smile, indoors".
+    """
+    situation = Situation(
+        name="rest",
+        label="休息",
+        guidance="Off duty and unguarded.",
+        tags=["sitting", "closed_eyes"],
+    )
+
+    with_tags = situation_direction(situation)
+    without = situation_direction(situation, with_tags=False)
+
+    assert "sitting" in with_tags
+    assert "Off duty and unguarded." in without
+    assert "sitting" not in without
+    assert "参考タグ" not in without
