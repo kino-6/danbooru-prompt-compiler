@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
+
+import pytest
 
 from danbooru_prompt_compiler.situation import (
     NO_SITUATION,
     Situation,
     find_situation,
+    group_situations,
     load_situations,
     situation_choices,
     situation_direction,
@@ -52,7 +56,9 @@ def test_having_no_situation_is_a_named_choice_rather_than_a_blank() -> None:
     # Most runs are not aimed at any particular kind of moment, so the absence
     # needs a name in the list rather than an empty row to guess at.
     assert choices[0] == ("（指定なし）", NO_SITUATION)
-    assert choices[1] == ("戦闘", "battle")
+    # The category rides in the label: a dropdown cannot show headings, and a
+    # flat list of forty-odd is one nobody reads to the end.
+    assert choices[1] == ("その他 / 戦闘", "battle")
     assert find_situation(NO_SITUATION, [BATTLE]) is None
     assert find_situation("nonesuch", [BATTLE]) is None
     assert find_situation("battle", [BATTLE]) is BATTLE
@@ -95,3 +101,50 @@ def test_prose_gets_the_direction_without_the_reference_tags() -> None:
     assert "Off duty and unguarded." in without
     assert "sitting" not in without
     assert "参考タグ" not in without
+
+
+def test_every_situation_on_disk_is_complete_and_grouped() -> None:
+    situations = load_situations()
+
+    assert len(situations) >= 40
+    for situation in situations:
+        assert situation.guidance.strip()
+        assert situation.category.strip()
+        assert situation.label.strip()
+
+
+def test_every_situation_tag_is_a_tag_the_dictionary_knows() -> None:
+    """A situation's tags are candidates for the compiler, not free text.
+
+    A tag the dictionary has never heard of is dropped silently downstream, so
+    a typo in a YAML file costs the situation part of its steer and says
+    nothing about it.
+    """
+    dictionary_path = Path(__file__).resolve().parents[1] / "data" / "tags.json"
+    if not dictionary_path.exists():  # pragma: no cover - dictionary is fetched
+        pytest.skip("tag dictionary has not been fetched yet")
+    known = set(json.loads(dictionary_path.read_text(encoding="utf-8")))
+
+    unknown = {
+        situation.name: [tag for tag in situation.tags if tag not in known]
+        for situation in load_situations()
+    }
+
+    assert not {name: bad for name, bad in unknown.items() if bad}
+
+
+def test_categories_come_out_in_the_order_their_members_ask_for() -> None:
+    situations = load_situations()
+
+    grouped = group_situations(situations)
+
+    assert [category for category, _members in grouped] == sorted(
+        {situation.category for situation in situations},
+        key=lambda category: min(
+            situation.order
+            for situation in situations
+            if situation.category == category
+        ),
+    )
+    # Every situation lands in exactly one group.
+    assert sum(len(members) for _category, members in grouped) == len(situations)

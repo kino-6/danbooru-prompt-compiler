@@ -1,0 +1,12 @@
+label: 追跡・逃走
+category: 動作
+order: 21
+guidance: >-
+  A chase in progress: running flat out, one glance thrown back over the
+  shoulder, hair and clothes dragged along behind. Somebody is gaining.
+tags:
+  - running
+  - looking_back
+  - motion_blur
+  - floating_hair
+  - outdoors

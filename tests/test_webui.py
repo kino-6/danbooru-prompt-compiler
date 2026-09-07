@@ -1026,20 +1026,36 @@ def test_the_progress_stages_the_service_reports_all_have_labels() -> None:
     assert reported <= set(webui.PROGRESS_LABELS)
 
 
-def test_the_situation_tab_offers_every_situation_at_once() -> None:
-    app = build_app()
-    picker = next(
+def _situation_pickers(app) -> list[dict]:
+    return [
         component
         for component in app.config["components"]
-        if component["props"].get("elem_id") == "situation-picker"
-    )
-    labels = {label for label, _value in picker["props"]["choices"]}
+        if str(component["props"].get("elem_id", "")).startswith("situation-picker-")
+    ]
 
-    # A checkbox group, not a dropdown: the point of the tab is asking for
-    # several at once.
-    assert picker["type"] == "checkboxgroup"
-    assert {"戦闘", "休息・くつろぎ"} <= labels
-    assert picker["props"]["value"] == []
+
+def test_the_situation_tab_offers_every_situation_grouped_by_category() -> None:
+    app = build_app()
+    pickers = _situation_pickers(app)
+    situations = load_situations()
+    offered = {
+        value for picker in pickers for _label, value in picker["props"]["choices"]
+    }
+
+    # Checkbox groups, not a dropdown: the point of the tab is asking for
+    # several at once, and one group per category rather than one list of
+    # forty-odd.
+    assert all(picker["type"] == "checkboxgroup" for picker in pickers)
+    assert len(pickers) == len({item.category for item in situations})
+    assert offered == {item.name for item in situations}
+    assert all(picker["props"]["value"] == [] for picker in pickers)
+
+
+def test_each_category_group_is_named_after_its_category() -> None:
+    app = build_app()
+    named = {picker["props"]["label"] for picker in _situation_pickers(app)}
+
+    assert named == {item.category for item in load_situations()}
 
 
 def test_the_situation_tab_has_a_box_for_every_situation_on_disk() -> None:
@@ -1049,9 +1065,12 @@ def test_the_situation_tab_has_a_box_for_every_situation_on_disk() -> None:
         for component in app.config["components"]
         if str(component["props"].get("elem_id", "")).startswith("situation-output-")
     ]
+    situations = load_situations()
 
-    assert len(boxes) == webui.MAX_SITUATION_SLOTS
-    assert webui.MAX_SITUATION_SLOTS >= len(load_situations())
+    # Derived rather than capped: dropping a YAML file into situations/ has to
+    # add a box on its own, or the sweep silently drops the last few.
+    assert len(boxes) == webui.situation_slots(situations)
+    assert len(boxes) >= len(situations)
     assert all(box["props"]["visible"] is False for box in boxes)
 
 

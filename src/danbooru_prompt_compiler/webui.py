@@ -13,7 +13,12 @@ from .normalizer import normalize_tags, parse_tag_text
 from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
 from .scene_prompt import load_templates
 from .settings_store import load_settings, remembered, save_settings
-from .situation import NO_SITUATION, load_situations, situation_choices
+from .situation import (
+    NO_SITUATION,
+    group_situations,
+    load_situations,
+    situation_choices,
+)
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -141,9 +146,10 @@ PROGRESS_LABELS = {
     "complete": "完了",
 }
 MAX_HISTORY_ITEMS = 20
-# Enough boxes for every situation on disk, with room for a few more before the
-# page has to be thought about again.
-MAX_SITUATION_SLOTS = 8
+# One output box per situation on disk, so dropping a YAML file into
+# situations/ adds a box without anyone editing the page. The floor only keeps
+# a small set from collapsing the layout.
+MIN_SITUATION_SLOTS = 8
 MAX_OUTPUT_VARIANTS = 4
 # Prompt boxes 2-4 hold the next-panel proposals that follow box 1.
 NEXT_PANEL_SLOTS = MAX_OUTPUT_VARIANTS - 1
@@ -597,10 +603,15 @@ def run_situation_sweep(
     return runs
 
 
-def _situation_updates(gr, runs: list[SituationRun]):
+def situation_slots(situations: Sequence[object]) -> int:
+    """How many output boxes the page needs for what is on disk."""
+    return max(len(situations), MIN_SITUATION_SLOTS)
+
+
+def _situation_updates(gr, runs: list[SituationRun], slots: int):
     """One box per situation, named by it, hidden where there is nothing."""
     updates = []
-    for index in range(MAX_SITUATION_SLOTS):
+    for index in range(slots):
         if index >= len(runs):
             updates.append(gr.update(value="", visible=False))
             continue
@@ -958,8 +969,14 @@ def build_app(*, service: WebPromptService | None = None):
         )
 
         def handle_situation_sweep(progress=gr.Progress(), *values):
+            # The picks arrive one list per category, so they are gathered back
+            # into the order the situations are defined in - the boxes should
+            # read down the page the way the groups do, not in the order the
+            # categories happened to be ticked in.
+            picks = set()
+            for group in values[: len(sweep.pickers)]:
+                picks.update(group or [])
             (
-                picked,
                 subject,
                 style,
                 template,
@@ -969,8 +986,8 @@ def build_app(*, service: WebPromptService | None = None):
                 gpu_wait_gb,
                 apply_tag_exclusions,
                 excluded_tags,
-            ) = values
-            chosen = list(picked or [])[:MAX_SITUATION_SLOTS]
+            ) = values[len(sweep.pickers) :]
+            chosen = [item.name for item in situations if item.name in picks]
             if not chosen:
                 return [
                     *(gr.update(value="", visible=False) for _ in sweep.boxes),
@@ -997,14 +1014,14 @@ def build_app(*, service: WebPromptService | None = None):
                 ),
             )
             return [
-                *_situation_updates(gr, runs),
+                *_situation_updates(gr, runs, len(sweep.boxes)),
                 *_situation_summary(gr, runs),
             ]
 
         situation_event = sweep.run_button.click(
             handle_situation_sweep,
             inputs=[
-                sweep.picked,
+                *sweep.pickers,
                 sweep.subject,
                 sweep.output_style,
                 sweep.template,
@@ -1022,9 +1039,19 @@ def build_app(*, service: WebPromptService | None = None):
         sweep.cancel_button.click(
             fn=None, cancels=[situation_event], queue=False
         )
+        grouped_situations = group_situations(situations)
         sweep.select_all_button.click(
-            lambda: gr.update(value=[item.name for item in situations]),
-            outputs=sweep.picked,
+            lambda: [
+                gr.update(value=[item.name for item in members])
+                for _category, members in grouped_situations
+            ],
+            outputs=sweep.pickers,
+            queue=False,
+        )
+        # Forty-six ticks are quicker to undo than to undo one at a time.
+        sweep.clear_button.click(
+            lambda: [gr.update(value=[]) for _ in sweep.pickers],
+            outputs=sweep.pickers,
             queue=False,
         )
         # The template only shapes prose, so it is only asked for when prose is
@@ -1440,6 +1467,7 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         gr.Markdown(
             "選んだシチュエーションごとにプロンプトを1件ずつ作ります。"
             "画像は使いません。"
+            "1件につきモデルを1回呼ぶので、多く選ぶとその分だけ時間がかかります。"
         )
         with gr.Row():
             subject = gr.Textbox(
@@ -1464,16 +1492,24 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     visible=False,
                     elem_id="situation-template",
                 )
-        picked = gr.CheckboxGroup(
-            choices=[(item.label, item.name) for item in situations],
-            value=[],
-            label="シチュエーション（複数選択可）",
-            elem_id="situation-picker",
-        )
+        # One group per category rather than one list of forty-odd. The groups
+        # come from the files, so a new situation joins its category and a new
+        # category appears on its own - neither needs this page changed.
+        pickers = []
+        for category, members in group_situations(situations):
+            pickers.append(
+                gr.CheckboxGroup(
+                    choices=[(item.label, item.name) for item in members],
+                    value=[],
+                    label=category,
+                    elem_id=f"situation-picker-{len(pickers) + 1}",
+                )
+            )
         # Equal widths made 停止 as prominent as 生成; the action being asked for
         # gets the room, and the two around it get what they need.
         with gr.Row():
             select_all_button = gr.Button("すべて選択", scale=1)
+            clear_button = gr.Button("選択解除", scale=1)
             run_button = gr.Button(
                 "まとめて生成", variant="primary", scale=3, elem_id="situation-run"
             )
@@ -1485,7 +1521,7 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         # One box per situation, named at run time by the situation it holds.
         # Two to a row, like the prompt boxes on the workbench.
         boxes = []
-        for start in range(0, MAX_SITUATION_SLOTS, 2):
+        for start in range(0, situation_slots(situations), 2):
             with gr.Row():
                 for slot in range(start, start + 2):
                     boxes.append(
@@ -1513,8 +1549,9 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         subject=subject,
         output_style=output_style,
         template=template,
-        picked=picked,
+        pickers=pickers,
         select_all_button=select_all_button,
+        clear_button=clear_button,
         run_button=run_button,
         cancel_button=cancel_button,
         boxes=boxes,

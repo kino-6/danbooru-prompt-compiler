@@ -1,0 +1,12 @@
+label: 転倒・落下
+category: 動作
+order: 28
+guidance: >-
+  Balance lost: arms thrown out, one foot already gone from under,
+  whatever was being carried in the air on its own.
+tags:
+  - falling
+  - outstretched_arms
+  - surprised
+  - motion_lines
+  - open_mouth

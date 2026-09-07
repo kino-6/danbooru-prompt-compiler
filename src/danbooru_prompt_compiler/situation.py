@@ -24,6 +24,9 @@ SITUATION_DIR = BASE_DIR / "situations"
 NO_SITUATION = ""
 
 
+DEFAULT_CATEGORY = "その他"
+
+
 @dataclass(frozen=True)
 class Situation:
     name: str
@@ -31,6 +34,10 @@ class Situation:
     guidance: str
     tags: list[str] = field(default_factory=list)
     order: int = 100
+    # Which group this belongs to. Once there are forty of these a flat list is
+    # a wall, and the grouping has to come from the files rather than from a
+    # list in the code, or adding a situation means editing the page too.
+    category: str = DEFAULT_CATEGORY
 
 
 def load_situations(directory: Path = SITUATION_DIR) -> list[Situation]:
@@ -58,10 +65,33 @@ def find_situation(name: str, situations: list[Situation]) -> Situation | None:
 
 
 def situation_choices(situations: list[Situation]) -> list[tuple[str, str]]:
-    """Dropdown entries, with the no-situation case named rather than blank."""
+    """Dropdown entries, with the no-situation case named rather than blank.
+
+    The category is carried in the label. A dropdown cannot show headings, and
+    forty bare labels in one list is a list nobody reads to the end; prefixed,
+    the entries arrive in groups and the box's own filter narrows to a group by
+    typing its name.
+    """
     return [("（指定なし）", NO_SITUATION)] + [
-        (situation.label, situation.name) for situation in situations
+        (f"{situation.category} / {situation.label}", situation.name)
+        for situation in situations
     ]
+
+
+def group_situations(situations: list[Situation]) -> list[tuple[str, list[Situation]]]:
+    """The situations by category, both kept in display order.
+
+    Categories are ordered by their earliest member rather than by a list kept
+    somewhere else, so a new category arrives with the file that introduces it
+    and lands where its `order` says.
+    """
+    grouped: dict[str, list[Situation]] = {}
+    for situation in situations:
+        grouped.setdefault(situation.category, []).append(situation)
+    return sorted(
+        grouped.items(),
+        key=lambda item: min(situation.order for situation in item[1]),
+    )
 
 
 def situation_direction(
@@ -111,4 +141,5 @@ def _read_situation(path: Path) -> Situation | None:
         guidance=guidance,
         tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
         order=int(stored.get("order") or 100),
+        category=str(stored.get("category") or DEFAULT_CATEGORY),
     )

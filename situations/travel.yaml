@@ -1,7 +1,8 @@
 label: 移動・旅
+category: 場面
 order: 40
 guidance: >-
-  On the way somewhere: walking, running, riding, carrying luggage, the
+  On the way somewhere: walking, running, riding, luggage carried, the
   background passing rather than surrounding.
 tags:
   - walking
