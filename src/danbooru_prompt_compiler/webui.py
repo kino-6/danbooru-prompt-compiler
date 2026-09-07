@@ -1753,17 +1753,18 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     select_all_button = gr.Button("すべて選択")
                     clear_button = gr.Button("選択解除")
                 run_button = gr.Button("選んだ分を生成", elem_id="situation-run")
-            with gr.Column(scale=3):
-                # First in this column and the progress is drawn on it. Left to
-                # Gradio's own choice it went onto the output boxes, which are
-                # empty and hidden until a run fills them, so it landed below
-                # the fold and the first run appeared to report nothing at all.
-                # It carries a line from the start too: an empty Markdown is
-                # zero pixels tall, and the progress is drawn inside it.
+                # Under the buttons, because the progress is drawn on it and
+                # this is the column the buttons are in. Put with the results
+                # instead it sat 308px away and above the button that starts
+                # the run, so pressing it changed nothing anywhere near where
+                # it was pressed - which reads as a button that does nothing.
+                # It carries a line from the start: an empty Markdown is zero
+                # pixels tall, and the progress is drawn inside it.
                 status = gr.Markdown(
-                    "シチュエーションを選んで「まとめて生成」を押してください。",
+                    "シチュエーションを選んで「おまかせ生成」を押してください。",
                     elem_id="situation-status",
                 )
+            with gr.Column(scale=3):
                 # 全文 first and by default: what this tab produces is prompts
                 # to paste, and a text holding only the lines that differ is
                 # not one. 違いだけ is for reading the set, which is a second

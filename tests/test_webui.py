@@ -1314,3 +1314,41 @@ def test_the_random_run_reaches_the_service_the_same_way_the_manual_one_does() -
 
     assert random_run["inputs"][1:] == manual["inputs"]
     assert random_run["outputs"][-len(manual["outputs"]) :] == manual["outputs"]
+
+
+def _layout_parent(node, wanted, parent=None):
+    """The id of the container the wanted component sits directly inside."""
+    if node.get("id") == wanted:
+        return parent
+    for child in node.get("children", []):
+        found = _layout_parent(child, wanted, node.get("id"))
+        if found is not None:
+            return found
+    return None
+
+
+def test_the_situation_status_sits_with_the_buttons_that_drive_it() -> None:
+    """A button that changes nothing near itself reads as a button that does nothing.
+
+    The progress is drawn on the status line, so it has to be in the column the
+    buttons are in. Moved across to the results it sat 308px away and above the
+    button that starts the run, and pressing おまかせ生成 changed nothing
+    anywhere the presser was looking.
+    """
+    app = build_app()
+    ids = {
+        component["props"].get("elem_id"): component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id")
+    }
+    layout = app.config["layout"]
+
+    # The run button is inside a row; the status is a sibling of that row.
+    button_row = _layout_parent(layout, ids["situation-random"])
+    assert _layout_parent(layout, ids["situation-status"]) == _layout_parent(
+        layout, button_row
+    )
+    # And not with the answers.
+    assert _layout_parent(layout, ids["situation-status"]) != _layout_parent(
+        layout, ids["situation-merged"]
+    )
