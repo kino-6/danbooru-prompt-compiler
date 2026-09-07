@@ -1058,20 +1058,22 @@ def test_each_category_group_is_named_after_its_category() -> None:
     assert named == {item.category for item in load_situations()}
 
 
-def test_the_situation_tab_has_a_box_for_every_situation_on_disk() -> None:
+def test_the_situation_tab_answers_in_one_text_rather_than_many_boxes() -> None:
+    """Forty-six boxes is not a result anyone reads, it is a haystack."""
     app = build_app()
-    boxes = [
+    per_situation = [
         component
         for component in app.config["components"]
         if str(component["props"].get("elem_id", "")).startswith("situation-output-")
     ]
-    situations = load_situations()
+    merged = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-merged"
+    )
 
-    # Derived rather than capped: dropping a YAML file into situations/ has to
-    # add a box on its own, or the sweep silently drops the last few.
-    assert len(boxes) == webui.situation_slots(situations)
-    assert len(boxes) >= len(situations)
-    assert all(box["props"]["visible"] is False for box in boxes)
+    assert per_situation == []
+    assert merged["props"]["visible"] is False
 
 
 def test_the_situation_template_only_appears_for_prose() -> None:
@@ -1145,15 +1147,46 @@ def test_a_failed_run_is_left_out_of_the_shared_part() -> None:
     assert "magic" not in comparison.distinct
 
 
-def test_the_diff_view_shows_differences_and_the_full_view_shows_prompts() -> None:
-    diff = webui._situation_updates(gradio, TAG_RUNS, 4, view="diff")
-    full = webui._situation_updates(gradio, TAG_RUNS, 4, view="full")
+def test_the_merged_text_can_be_split_back_into_the_prompts_it_holds() -> None:
+    """Glued together carelessly this would be worse than the boxes it replaced.
 
-    assert diff[0]["value"] == "holding_weapon, dynamic_pose\nfighting_stance"
-    assert diff[-1]["visible"] is True  # the shared box
-    assert diff[-1]["value"] == "1girl, solo\nsilver_hair\nelf, bow"
-    assert full[0]["value"] == TAG_RUNS[0].prompt
-    assert full[-1]["visible"] is False
+    So the joining is a stated format, and the function that undoes it is held
+    against the one that makes it rather than assumed to match.
+    """
+    _shared, merged = webui.merge_situation_runs(TAG_RUNS)
+
+    assert webui.split_situation_blocks(merged) == [
+        ("戦闘", TAG_RUNS[0].prompt),
+        ("休息", TAG_RUNS[1].prompt),
+    ]
+    # A blank line cannot occur inside a prompt, whose own lines are single
+    # newlines apart, so it is unambiguous as the boundary.
+    assert merged.count("\n\n") == len(TAG_RUNS) - 1
+    assert merged.startswith("# 戦闘\n")
+
+
+def test_the_full_view_carries_whole_prompts_and_the_diff_view_the_rest() -> None:
+    shared_full, full = webui.merge_situation_runs(TAG_RUNS, view="full")
+    shared_diff, diff = webui.merge_situation_runs(TAG_RUNS, view="diff")
+
+    # The shared prompt is reported either way - it is asked for in its own
+    # right - but only 違いだけ takes it out of the blocks.
+    assert shared_full == shared_diff == "1girl, solo\nsilver_hair\nelf, bow"
+    assert dict(webui.split_situation_blocks(full))["戦闘"] == TAG_RUNS[0].prompt
+    assert (
+        dict(webui.split_situation_blocks(diff))["戦闘"]
+        == "holding_weapon, dynamic_pose\nfighting_stance"
+    )
+
+
+def test_a_failed_situation_keeps_its_block_and_says_why() -> None:
+    runs = [*TAG_RUNS, webui.SituationRun("magic", "魔法", error="落ちました")]
+
+    _shared, merged = webui.merge_situation_runs(runs)
+
+    # Which one failed is the whole of the answer; a missing block would not
+    # say, and the blocks have to stay in step with what was asked for.
+    assert dict(webui.split_situation_blocks(merged))["魔法"] == "落ちました"
 
 
 def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
@@ -1178,19 +1211,18 @@ def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
     assert dependency["show_progress_on"] == [status_id]
 
 
-def test_nothing_shared_means_the_boxes_are_not_called_differences() -> None:
+def test_nothing_shared_leaves_the_blocks_whole_under_either_view() -> None:
     runs = [
         webui.SituationRun("battle", "戦闘", "holding_weapon"),
         webui.SituationRun("rest", "休息", "sitting"),
     ]
 
-    updates = webui._situation_updates(gradio, runs, 2, view="diff")
+    shared, merged = webui.merge_situation_runs(runs, view="diff")
 
-    # Subtracting nothing and labelling the result a difference is a lie about
-    # what the box holds.
-    assert updates[0]["label"] == "戦闘"
-    assert updates[0]["value"] == "holding_weapon"
-    assert updates[-1]["visible"] is False
+    # Subtracting nothing and presenting the result as a difference would be a
+    # lie about what the text holds.
+    assert shared == ""
+    assert dict(webui.split_situation_blocks(merged))["戦闘"] == "holding_weapon"
 
 
 def test_the_situation_tab_is_named_for_what_it_produces() -> None:

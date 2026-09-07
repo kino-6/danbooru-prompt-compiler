@@ -667,50 +667,76 @@ def compare_situation_runs(
     )
 
 
-def situation_slots(situations: Sequence[object]) -> int:
-    """How many output boxes the page needs for what is on disk."""
-    return max(len(situations), MIN_SITUATION_SLOTS)
-
-
 NOTHING_OF_ITS_OWN = "共通部分と同じで、このシチュエーション固有の要素はありませんでした。"
+# One blank line between situations, and a marked name line opening each. A
+# prompt's own lines are separated by single newlines, so a blank line cannot
+# occur inside one and is unambiguous as the boundary: `text.split("\n\n")`
+# gives the blocks back, and dropping each block's first line gives the prompt.
+SITUATION_BLOCK_SEPARATOR = "\n\n"
+SITUATION_BLOCK_PREFIX = "# "
 
 
-def _situation_updates(
-    gr,
-    runs: list[SituationRun],
-    slots: int,
+def situation_block(label: str, body: str) -> str:
+    """One situation's part of the merged text, named and separable."""
+    return f"{SITUATION_BLOCK_PREFIX}{label}\n{(body or '').strip()}"
+
+
+def split_situation_blocks(merged: str) -> list[tuple[str, str]]:
+    """The merged text back into (label, prompt) pairs.
+
+    Here so the format is not just an assumption made twice: whatever the page
+    joins, this takes apart, and the tests hold the two against each other.
+    """
+    blocks = []
+    for chunk in (merged or "").split(SITUATION_BLOCK_SEPARATOR):
+        lines = chunk.strip().splitlines()
+        if not lines:
+            continue
+        head = lines[0]
+        if not head.startswith(SITUATION_BLOCK_PREFIX):
+            continue
+        blocks.append(
+            (head[len(SITUATION_BLOCK_PREFIX) :].strip(), "\n".join(lines[1:]).strip())
+        )
+    return blocks
+
+
+def merge_situation_runs(
+    runs: Sequence[SituationRun],
     *,
     as_prose: bool = False,
     view: str = "full",
-):
-    """The boxes and the shared box, either whole or reduced to differences."""
+) -> tuple[str, str]:
+    """The shared prompt, and every situation merged into one splittable text.
+
+    A box per situation meant hunting through up to forty-six of them for the
+    one wanted. What the tab hands back is a shared prompt and a single merged
+    one - glued together carelessly that would be worse than the boxes, so the
+    joining is a stated format with a function to undo it.
+    """
     comparison = compare_situation_runs(runs, as_prose=as_prose)
-    # Nothing shared means nothing was taken out, so calling the boxes
-    # 「違い」 would be a label for a subtraction that never happened.
+    # Nothing shared means nothing can be taken out, so 違いだけ has nothing to
+    # show and the blocks stay whole.
     show_diff = view == "diff" and bool(comparison.shared)
-    updates = []
-    for index in range(slots):
-        if index >= len(runs):
-            updates.append(gr.update(value="", visible=False))
-            continue
-        run = runs[index]
-        # A failed situation still gets its box: which one failed is the whole
-        # of the answer, and an empty slot would not say.
+    blocks = []
+    for run in runs:
         if run.error:
-            label, text = f"{run.label}（失敗）", run.error
+            body = run.error
         elif show_diff:
-            label = f"{run.label}（違い）"
-            text = comparison.distinct.get(run.name, "") or NOTHING_OF_ITS_OWN
+            body = comparison.distinct.get(run.name, "") or NOTHING_OF_ITS_OWN
         else:
-            label, text = run.label, run.prompt
-        updates.append(gr.update(label=label, value=text, visible=True))
-    updates.append(
-        gr.update(
-            value=comparison.shared if show_diff else "",
-            visible=bool(show_diff and comparison.shared),
-        )
-    )
-    return updates
+            body = run.prompt
+        blocks.append(situation_block(run.label, body))
+    return comparison.shared, SITUATION_BLOCK_SEPARATOR.join(blocks)
+
+
+def _situation_outputs(gr, runs: list[SituationRun], *, as_prose: bool, view: str):
+    """The shared prompt and the merged one, shown only once they hold something."""
+    shared, merged = merge_situation_runs(runs, as_prose=as_prose, view=view)
+    return [
+        gr.update(value=shared, visible=bool(shared)),
+        gr.update(value=merged, visible=bool(merged)),
+    ]
 
 
 def _situation_summary(gr, runs: list[SituationRun]):
@@ -1077,7 +1103,7 @@ def build_app(*, service: WebPromptService | None = None):
             as_prose = style == "prose"
             if not chosen:
                 return [
-                    *(gr.update(value="", visible=False) for _ in sweep.boxes),
+                    gr.update(value="", visible=False),
                     gr.update(value="", visible=False),
                     gr.update(value="", visible=False),
                     "シチュエーションを1つ以上選んでください。",
@@ -1103,9 +1129,7 @@ def build_app(*, service: WebPromptService | None = None):
                 ),
             )
             return [
-                *_situation_updates(
-                    gr, runs, len(sweep.boxes), as_prose=as_prose, view=view
-                ),
+                *_situation_outputs(gr, runs, as_prose=as_prose, view=view),
                 *_situation_summary(gr, runs),
                 # Kept so switching between 違いだけ and 全文 re-reads the same
                 # answers instead of asking the models for them again.
@@ -1128,8 +1152,8 @@ def build_app(*, service: WebPromptService | None = None):
                 settings.excluded_tags,
             ],
             outputs=[
-                *sweep.boxes,
                 sweep.shared,
+                sweep.merged,
                 sweep.avoid,
                 sweep.status,
                 sweep.runs_state,
@@ -1144,14 +1168,12 @@ def build_app(*, service: WebPromptService | None = None):
 
         def handle_situation_view(view: str, state):
             runs, as_prose = state if state else ([], False)
-            return _situation_updates(
-                gr, runs, len(sweep.boxes), as_prose=as_prose, view=view
-            )
+            return _situation_outputs(gr, runs, as_prose=as_prose, view=view)
 
         sweep.view.change(
             handle_situation_view,
             inputs=[sweep.view, sweep.runs_state],
-            outputs=[*sweep.boxes, sweep.shared],
+            outputs=[sweep.shared, sweep.merged],
             queue=False,
         )
         sweep.cancel_button.click(
@@ -1585,42 +1607,130 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
     """
     with gr.Tab("シチュエーション一括生成", elem_id="situation-tab"):
         gr.Markdown(
-            "選んだシチュエーションごとにプロンプトを1件ずつ作ります。"
+            "選んだシチュエーションごとにプロンプトを1件ずつ作り、1つにまとめて返します。"
             "画像は使いません。"
             "1件につきモデルを1回呼ぶので、多く選ぶとその分だけ時間がかかります。"
         )
+        # What to make and what came out, side by side at the top; the picker
+        # gets its own full-width row underneath. Stacked, the answers began
+        # below the fold however few there were. Moved into this column with
+        # the picker, the picker doubled in height at half the width and took
+        # the run button off the screen instead - it is five short rows wide
+        # and ten tall, so width is what it wants.
         with gr.Row():
-            subject = gr.Textbox(
-                label="共通の主題（任意）",
-                placeholder="例: 弓を持った銀髪のエルフ",
-                lines=2,
-                elem_id="situation-subject",
-                info="すべてのシチュエーションで共通の人物・場面。"
-                "空欄ならシチュエーションだけで生成します。",
-            )
-            with gr.Column():
-                output_style = gr.Radio(
-                    choices=[("タグ", "tags"), ("自然文", "prose")],
-                    value="tags",
-                    label="出力形式",
-                    elem_id="situation-style",
+            # The controls need less room than the answers do, and prose runs
+            # to long lines.
+            with gr.Column(scale=2):
+                subject = gr.Textbox(
+                    label="共通の主題（任意）",
+                    placeholder="例: 弓を持った銀髪のエルフ",
+                    lines=2,
+                    elem_id="situation-subject",
+                    info="すべてのシチュエーションで共通の人物・場面。"
+                    "空欄ならシチュエーションだけで生成します。",
                 )
-                # A character sheet is the same character rendered neutrally,
-                # so its Lighting and Layout slots ("key light direction",
-                # "framing, camera distance") have nothing to do with the
-                # moment and came back word for word in every situation. A
-                # scene illustration asks about place, time of day and mood,
-                # which is what a situation actually changes.
-                template = gr.Dropdown(
-                    choices=[(item.label, item.name) for item in load_templates()],
-                    value=SWEEP_SCENE_TEMPLATE,
-                    label="自然文プロンプトのテンプレート",
+                with gr.Row():
+                    output_style = gr.Radio(
+                        choices=[("タグ", "tags"), ("自然文", "prose")],
+                        value="tags",
+                        label="出力形式",
+                        elem_id="situation-style",
+                    )
+                    # A character sheet is the same character rendered
+                    # neutrally, so its Lighting and Layout slots ("key light
+                    # direction", "framing, camera distance") have nothing to
+                    # do with the moment and came back word for word in every
+                    # situation. A scene illustration asks about place, time of
+                    # day and mood, which is what a situation actually changes.
+                    template = gr.Dropdown(
+                        choices=[(item.label, item.name) for item in load_templates()],
+                        value=SWEEP_SCENE_TEMPLATE,
+                        label="自然文プロンプトのテンプレート",
+                        visible=False,
+                        elem_id="situation-template",
+                    )
+                # Two rows rather than four buttons across half the page: at
+                # that width the fourth wrapped onto a line of its own anyway,
+                # and wrapped it was 停止 that got the whole line.
+                with gr.Row():
+                    select_all_button = gr.Button("すべて選択")
+                    clear_button = gr.Button("選択解除")
+                with gr.Row():
+                    run_button = gr.Button(
+                        "まとめて生成",
+                        variant="primary",
+                        scale=3,
+                        elem_id="situation-run",
+                    )
+                    # A sweep is one model call per situation, so it runs long
+                    # enough that leaving without a way to stop it would be its
+                    # own bug.
+                    cancel_button = gr.Button(
+                        "停止", variant="stop", scale=1, elem_id="situation-cancel"
+                    )
+            with gr.Column(scale=3):
+                # First in this column and the progress is drawn on it. Left to
+                # Gradio's own choice it went onto the output boxes, which are
+                # empty and hidden until a run fills them, so it landed below
+                # the fold and the first run appeared to report nothing at all.
+                # It carries a line from the start too: an empty Markdown is
+                # zero pixels tall, and the progress is drawn inside it.
+                status = gr.Markdown(
+                    "シチュエーションを選んで「まとめて生成」を押してください。",
+                    elem_id="situation-status",
+                )
+                # 全文 first and by default: what this tab produces is prompts
+                # to paste, and a text holding only the lines that differ is
+                # not one. 違いだけ is for reading the set, which is a second
+                # thing you may want to do with it rather than what it is for.
+                view = gr.Radio(
+                    choices=[("全文", "full"), ("違いだけ", "diff")],
+                    value="full",
+                    label="出力の見せかた",
+                    elem_id="situation-view",
+                    info="「全文」は各ブロックがそのまま貼り付けられる完成形。"
+                    "「違いだけ」は共通部分を抜き、各ブロックに固有の行だけを残します。",
+                )
+                shared = gr.Textbox(
+                    label="共通プロンプト",
+                    lines=3,
+                    buttons=["copy"],
+                    interactive=True,
                     visible=False,
-                    elem_id="situation-template",
+                    elem_id="situation-shared",
+                    info="どのシチュエーションでも同じだった部分です。"
+                    "「全文」では各ブロックにも入っています。"
+                    "「違いだけ」ではこれと各ブロックを合わせて1件分になります。",
                 )
-        # One group per category rather than one list of forty-odd. The groups
-        # come from the files, so a new situation joins its category and a new
-        # category appears on its own - neither needs this page changed.
+                # One text rather than a box per situation: up to forty-six
+                # boxes is not a result anyone reads, it is a haystack. Joined
+                # carelessly it would be worse than the boxes, so the format is
+                # stated and `split_situation_blocks` undoes it.
+                merged = gr.Textbox(
+                    label="統合プロンプト",
+                    lines=16,
+                    max_lines=28,
+                    buttons=["copy"],
+                    interactive=True,
+                    visible=False,
+                    elem_id="situation-merged",
+                    info="空行区切り、各ブロックの先頭が「# シチュエーション名」です。"
+                    "空行で分割し、先頭行を外せば1件分のプロンプトになります。",
+                )
+                # Shared rather than one per block: the avoid list comes from
+                # the exclusion rules, so it is the same for every situation.
+                avoid = gr.Textbox(
+                    label="除外（ネガティブプロンプト）",
+                    lines=2,
+                    buttons=["copy"],
+                    interactive=True,
+                    visible=False,
+                    elem_id="situation-avoid",
+                )
+        # Full width, which is what keeps it to five short rows. One group per
+        # category rather than one list of forty-odd, and the groups come from
+        # the files: a new situation joins its category and a new category
+        # appears on its own, neither needing this page changed.
         pickers = []
         for category, members in group_situations(situations):
             pickers.append(
@@ -1631,80 +1741,6 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     elem_id=f"situation-picker-{len(pickers) + 1}",
                 )
             )
-        # Equal widths made 停止 as prominent as 生成; the action being asked for
-        # gets the room, and the two around it get what they need.
-        with gr.Row():
-            select_all_button = gr.Button("すべて選択", scale=1)
-            clear_button = gr.Button("選択解除", scale=1)
-            run_button = gr.Button(
-                "まとめて生成", variant="primary", scale=3, elem_id="situation-run"
-            )
-            # A sweep is one model call per situation, so it runs long enough
-            # that leaving without a way to stop it would be its own bug.
-            cancel_button = gr.Button(
-                "停止", variant="stop", scale=1, elem_id="situation-cancel"
-            )
-        # Directly under the button, and the progress is drawn on it. Left at
-        # the foot of the page it rendered 43px below the fold on a 1100px
-        # viewport, so the first run - the one with every output box still
-        # hidden - appeared to report nothing at all; from the second run on it
-        # landed on the now-visible boxes and looked fine.
-        # It carries a line from the start: an empty Markdown is zero pixels
-        # tall, and the progress is drawn inside it.
-        status = gr.Markdown(
-            "シチュエーションを選んで「まとめて生成」を押してください。",
-            elem_id="situation-status",
-        )
-        # Only filled under 違いだけ, where the shared lines are lifted out of
-        # every box and said once here instead.
-        # 全文 first and by default: what this tab produces is prompts to
-        # paste, and a box holding only the lines that differ is not one.
-        # 違いだけ is for reading the set, which is a second thing you may want
-        # to do with it rather than what it is for.
-        view = gr.Radio(
-            choices=[("全文", "full"), ("違いだけ", "diff")],
-            value="full",
-            label="出力の見せかた",
-            elem_id="situation-view",
-            info="「全文」はそのまま貼り付けられる完成形。"
-            "「違いだけ」は共通部分を1つにまとめ、各ボックスには固有の行だけを残します。",
-        )
-        shared = gr.Textbox(
-            label="全シチュエーション共通",
-            lines=4,
-            buttons=["copy"],
-            interactive=True,
-            visible=False,
-            elem_id="situation-shared",
-            info="どのシチュエーションでも同じだった部分です。"
-            "「違いだけ」表示のときは、これと各ボックスを合わせて1件分になります。",
-        )
-        # One box per situation, named at run time by the situation it holds.
-        # Two to a row, like the prompt boxes on the workbench.
-        boxes = []
-        for start in range(0, situation_slots(situations), 2):
-            with gr.Row():
-                for slot in range(start, start + 2):
-                    boxes.append(
-                        gr.Textbox(
-                            label="",
-                            lines=6,
-                            buttons=["copy"],
-                            interactive=True,
-                            visible=False,
-                            elem_id=f"situation-output-{slot + 1}",
-                        )
-                    )
-        # Shared rather than one per box: the avoid list comes from the
-        # exclusion rules, so it is the same for every situation in the sweep.
-        avoid = gr.Textbox(
-            label="除外（ネガティブプロンプト）",
-            lines=2,
-            buttons=["copy"],
-            interactive=True,
-            visible=False,
-            elem_id="situation-avoid",
-        )
     return SimpleNamespace(
         subject=subject,
         output_style=output_style,
@@ -1716,7 +1752,7 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         cancel_button=cancel_button,
         view=view,
         shared=shared,
-        boxes=boxes,
+        merged=merged,
         avoid=avoid,
         status=status,
         runs_state=gr.State([]),
