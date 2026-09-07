@@ -108,3 +108,27 @@ def test_a_model_already_on_the_card_is_not_waited_for() -> None:
             # Nothing is going to be loaded, so a wait could only delay the
             # fastest runs there are.
             assert wait_for_gpu("http://ollama.test", limit_mib=4096, client=client) == ""
+
+
+def test_the_wait_keeps_saying_so_while_it_waits() -> None:
+    """Said once, the line sat unchanged for the whole two minutes.
+
+    That is what made a run that was waiting look like a run that had hung.
+    """
+    clock = iter([0.0, 3.0, 6.0, 9.0, 12.0])
+    calls: list[int] = []
+    with mock.patch.object(gpu_watch, "gpu_memory_used_mib", lambda: 15000):
+        with _ps([]) as client:
+            note = wait_for_gpu(
+                "http://ollama.test",
+                limit_mib=4096,
+                timeout=9.0,
+                client=client,
+                on_wait=lambda: calls.append(1),
+                sleep=lambda _seconds: None,
+                now=lambda: next(clock),
+            )
+
+    # Once before the wait, then again on every poll of it.
+    assert len(calls) > 2
+    assert note

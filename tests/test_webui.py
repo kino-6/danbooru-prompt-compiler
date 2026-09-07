@@ -260,10 +260,12 @@ class SweepService:
 
     def __init__(self, fails: set[str] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
+        self.progress_callbacks: list[object] = []
         self.fails = fails or set()
 
     def run(self, *, image_path, on_progress=None, **options) -> WebRunResult:
         self.calls.append({"image_path": image_path, **options})
+        self.progress_callbacks.append(on_progress)
         situation = str(options.get("situation", ""))
         if situation in self.fails:
             raise RuntimeError(f"{situation} は失敗しました")
@@ -337,7 +339,7 @@ def test_one_failed_situation_does_not_lose_the_others() -> None:
     assert "失敗" in runs[1].error
 
 
-def test_a_sweep_says_which_situation_it_is_on() -> None:
+def test_a_sweep_says_which_situation_it_is_on_and_for_how_long() -> None:
     service = SweepService()
     stages: list[str] = []
 
@@ -348,10 +350,53 @@ def test_a_sweep_says_which_situation_it_is_on() -> None:
         on_progress=lambda stage, _fraction: stages.append(stage),
     )
 
-    # The name, not a number: six runs in a row is long enough that "which one
-    # is it on" is a real question.
-    assert "戦闘" in stages[0]
-    assert "休息" in stages[1]
+    # The name, not a number: eight runs in a row is long enough that "which
+    # one is it on" is a real question. And the clock, because a run can sit on
+    # one stage for two minutes waiting for the card.
+    assert "戦闘" in stages[0] and "1/2" in stages[0]
+    assert "秒経過" in stages[0]
+    assert any("休息" in stage for stage in stages)
+
+
+def test_a_sweep_passes_each_run_its_own_progress_reporter() -> None:
+    """Reported only between situations, the line sat still for the whole run.
+
+    With another program on the card that is up to two minutes of waiting
+    before a token is asked for, and it read as hung.
+    """
+    service = SweepService()
+    stages: list[str] = []
+
+    webui.run_situation_sweep(
+        service,
+        ["battle"],
+        SWEEP_LABELS,
+        on_progress=lambda stage, _fraction: stages.append(stage),
+    )
+
+    assert service.progress_callbacks and all(
+        callback is not None for callback in service.progress_callbacks
+    )
+    # The service's own stage names arrive translated and under the situation.
+    service.progress_callbacks[0]("gpu_wait", 0.03)
+    assert "戦闘" in stages[-1]
+    assert webui.PROGRESS_LABELS["gpu_wait"] in stages[-1]
+
+
+def test_the_sweep_bar_moves_inside_a_situation_as_well_as_between_them() -> None:
+    service = SweepService()
+    seen: list[float] = []
+
+    webui.run_situation_sweep(
+        service,
+        ["battle", "rest"],
+        SWEEP_LABELS,
+        on_progress=lambda _stage, fraction: seen.append(fraction),
+    )
+    service.progress_callbacks[0]("compilation", 0.7)
+
+    # Two situations, so the first one's own 70% is 35% of the sweep.
+    assert seen[-1] == pytest.approx(0.35)
 
 
 def test_a_sweep_ignores_situations_it_has_no_label_for() -> None:

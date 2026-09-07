@@ -118,6 +118,11 @@ def wait_for_gpu(
     while True:
         sleep(poll_seconds)
         waited = now() - started
+        # Again on every poll, not only at the start: said once, the line sat
+        # unchanged for the whole two minutes, which is the thing it was added
+        # to stop looking like.
+        if on_wait is not None:
+            on_wait()
         foreign = foreign_vram_mib(base_url, client=client)
         if foreign is None or foreign <= limit_mib:
             return f"他タスクのGPU使用が収まるまで{waited:.0f}秒待機しました。"

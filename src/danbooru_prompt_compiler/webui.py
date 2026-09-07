@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -567,15 +568,36 @@ def run_situation_sweep(
     chosen = [name for name in situations if name in labels]
     shared = dict(options or {})
     runs: list[SituationRun] = []
+    total = len(chosen)
+    started = time.monotonic()
     for index, name in enumerate(chosen):
         label = labels[name]
-        # Named rather than numbered: six runs in a row is long enough that
-        # "which one is it on" is a real question.
-        if on_progress is not None:
+
+        def report(stage: str = "", fraction: float = 0.0, *, at=index, of=label):
+            """Where the sweep is, what that run is doing, and for how long.
+
+            Reporting only between situations left the line reading
+            "（1/8） - 0.0%" for as long as the first one took - which, with
+            another program holding the card, is up to two minutes of the GPU
+            wait before a single token is asked for. It looked hung. So each
+            run's own stages come through here, named after the situation they
+            belong to, and the elapsed time says the thing is still moving even
+            when the stage does not change.
+            """
+            if on_progress is None:
+                return
+            detail = PROGRESS_LABELS.get(stage, stage)
+            waited = time.monotonic() - started
+            # Named rather than numbered: eight runs in a row is long enough
+            # that "which one is it on" is a real question.
+            head = f"「{of}」（{at + 1}/{total}）"
+            body = f"{head}{detail}" if detail else head
             on_progress(
-                f"「{label}」を生成しています（{index + 1}/{len(chosen)}）",
-                index / len(chosen),
+                f"{body} — {waited:.0f}秒経過",
+                (at + min(max(fraction, 0.0), 1.0)) / total,
             )
+
+        report()
         try:
             result = service.run(
                 image_path=None,
@@ -584,6 +606,7 @@ def run_situation_sweep(
                 action_override="scene_prompt" if as_prose else "compile",
                 variants=1,
                 use_vision=False,
+                on_progress=report,
                 **shared,
             )
         except Exception as exc:
