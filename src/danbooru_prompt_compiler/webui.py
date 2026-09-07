@@ -19,6 +19,11 @@ from .situation import (
     load_situations,
     situation_choices,
 )
+from .subject_seed import (
+    load_subject_vocabulary,
+    random_situation_names,
+    random_subject,
+)
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -825,6 +830,7 @@ def build_app(*, service: WebPromptService | None = None):
         return dispatch(values, progress, action_override="next_panel")
 
     situations = load_situations()
+    vocabulary = load_subject_vocabulary()
 
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
@@ -1093,27 +1099,8 @@ def build_app(*, service: WebPromptService | None = None):
             queue=False,
         )
 
-        def handle_situation_sweep(progress=gr.Progress(), *values):
-            # The picks arrive one list per category, so they are gathered back
-            # into the order the situations are defined in - the boxes should
-            # read down the page the way the groups do, not in the order the
-            # categories happened to be ticked in.
-            picks = set()
-            for group in values[: len(sweep.pickers)]:
-                picks.update(group or [])
-            (
-                subject,
-                style,
-                view,
-                template,
-                ollama_url,
-                compiler_model,
-                scene_model,
-                gpu_wait_gb,
-                apply_tag_exclusions,
-                excluded_tags,
-            ) = values[len(sweep.pickers) :]
-            chosen = [item.name for item in situations if item.name in picks]
+        def run_sweep(progress, chosen, subject, style, view, settings_values):
+            """The sweep itself, once the situations and subject are settled."""
             as_prose = style == "prose"
             if not chosen:
                 return [
@@ -1123,6 +1110,15 @@ def build_app(*, service: WebPromptService | None = None):
                     "シチュエーションを1つ以上選んでください。",
                     [],
                 ]
+            (
+                template,
+                ollama_url,
+                compiler_model,
+                scene_model,
+                gpu_wait_gb,
+                apply_tag_exclusions,
+                excluded_tags,
+            ) = settings_values
             runs = run_situation_sweep(
                 prompt_service,
                 chosen,
@@ -1145,33 +1141,86 @@ def build_app(*, service: WebPromptService | None = None):
             return [
                 *_situation_outputs(gr, runs, as_prose=as_prose, view=view),
                 *_situation_summary(gr, runs),
-                # Kept so switching between 違いだけ and 全文 re-reads the same
+                # Kept so switching between the two shapes re-reads the same
                 # answers instead of asking the models for them again.
                 (runs, as_prose),
             ]
 
+        def _chosen_and_rest(values):
+            """The ticked situations, in page order, and everything after them."""
+            picks = set()
+            for group in values[: len(sweep.pickers)]:
+                picks.update(group or [])
+            return (
+                [item.name for item in situations if item.name in picks],
+                values[len(sweep.pickers) :],
+            )
+
+        def handle_situation_sweep(progress=gr.Progress(), *values):
+            # The picks arrive one list per category, so they are gathered back
+            # into the order the situations are defined in - the blocks should
+            # read the way the groups do, not in the order they were ticked.
+            chosen, rest = _chosen_and_rest(values)
+            subject, style, view, *settings_values = rest
+            return run_sweep(progress, chosen, subject, style, view, settings_values)
+
+        def handle_random_sweep(progress=gr.Progress(), *values):
+            """Invent a subject, pick the situations, and run - in one call.
+
+            Chained as two events this raced: the second press ran on the
+            values the first press had left behind, because the randomised ones
+            had not reached the browser and come back yet. It finished in a
+            second with the previous answer still on screen. Deciding and
+            running in the same call cannot get that wrong; the picks are
+            returned alongside the answers so they still show in the controls,
+            which is what lets a random run be adjusted and repeated.
+            """
+            count, *rest_values = values
+            _ignored, rest = _chosen_and_rest(rest_values)
+            _typed_subject, style, view, *settings_values = rest
+            chosen = random_situation_names(
+                [item.name for item in situations], int(count or 1)
+            )
+            subject = random_subject(vocabulary, as_prose=style == "prose")
+            picked = set(chosen)
+            return [
+                subject,
+                *(
+                    gr.update(
+                        value=[item.name for item in members if item.name in picked]
+                    )
+                    for _category, members in group_situations(situations)
+                ),
+                *run_sweep(progress, chosen, subject, style, view, settings_values),
+            ]
+
+        # Named once: the random path runs on the same controls, and two lists
+        # kept in step by hand would drift the first time a setting was added
+        # to one of them. The random path prepends its own count.
+        situation_inputs = [
+            *sweep.pickers,
+            sweep.subject,
+            sweep.output_style,
+            sweep.view,
+            sweep.template,
+            settings.ollama_url,
+            settings.compiler_model,
+            settings.scene_model,
+            settings.gpu_wait_gb,
+            settings.apply_tag_exclusions,
+            settings.excluded_tags,
+        ]
+        situation_outputs = [
+            sweep.shared,
+            sweep.merged,
+            sweep.avoid,
+            sweep.status,
+            sweep.runs_state,
+        ]
         situation_event = sweep.run_button.click(
             handle_situation_sweep,
-            inputs=[
-                *sweep.pickers,
-                sweep.subject,
-                sweep.output_style,
-                sweep.view,
-                sweep.template,
-                settings.ollama_url,
-                settings.compiler_model,
-                settings.scene_model,
-                settings.gpu_wait_gb,
-                settings.apply_tag_exclusions,
-                settings.excluded_tags,
-            ],
-            outputs=[
-                sweep.shared,
-                sweep.merged,
-                sweep.avoid,
-                sweep.status,
-                sweep.runs_state,
-            ],
+            inputs=situation_inputs,
+            outputs=situation_outputs,
             # Drawn on the status line under the button. Left to Gradio's own
             # choice it went onto the output boxes, which are all hidden on the
             # first run - so the run that most needs reporting reported nothing.
@@ -1190,10 +1239,18 @@ def build_app(*, service: WebPromptService | None = None):
             outputs=[sweep.shared, sweep.merged],
             queue=False,
         )
-        sweep.cancel_button.click(
-            fn=None, cancels=[situation_event], queue=False
-        )
         grouped_situations = group_situations(situations)
+        random_event = sweep.random_button.click(
+            handle_random_sweep,
+            inputs=[sweep.random_count, *situation_inputs],
+            outputs=[sweep.subject, *sweep.pickers, *situation_outputs],
+            show_progress_on=sweep.status,
+            api_name="run_random_situations",
+            concurrency_limit=1,
+        )
+        sweep.cancel_button.click(
+            fn=None, cancels=[situation_event, random_event], queue=False
+        )
         sweep.select_all_button.click(
             lambda: [
                 gr.update(value=[item.name for item in members])
@@ -1621,9 +1678,11 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
     """
     with gr.Tab("シチュエーション一括生成", elem_id="situation-tab"):
         gr.Markdown(
-            "選んだシチュエーションごとにプロンプトを1件ずつ作り、1つにまとめて返します。"
+            "シチュエーションごとにプロンプトを1件ずつ作り、1つにまとめて返します。"
             "画像は使いません。"
-            "1件につきモデルを1回呼ぶので、多く選ぶとその分だけ時間がかかります。"
+            "「おまかせ生成」は主題とシチュエーションをその場でランダムに決めて、"
+            "そのまま最後まで実行します。何も入力・選択しなくて構いません。"
+            "1件につきモデルを1回呼ぶので、件数を増やすとその分だけ時間がかかります。"
         )
         # What to make and what came out, side by side at the top; the picker
         # gets its own full-width row underneath. Stacked, the answers began
@@ -1663,18 +1722,23 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                         visible=False,
                         elem_id="situation-template",
                     )
-                # Two rows rather than four buttons across half the page: at
-                # that width the fourth wrapped onto a line of its own anyway,
-                # and wrapped it was 停止 that got the whole line.
+                # The hands-off path first, and it is the primary one:
+                # choosing a subject and a handful of situations by hand is the
+                # part of a sweep that is work rather than result.
+                random_count = gr.Slider(
+                    1,
+                    8,
+                    value=3,
+                    step=1,
+                    label="おまかせで選ぶ件数",
+                    elem_id="situation-random-count",
+                )
                 with gr.Row():
-                    select_all_button = gr.Button("すべて選択")
-                    clear_button = gr.Button("選択解除")
-                with gr.Row():
-                    run_button = gr.Button(
-                        "まとめて生成",
+                    random_button = gr.Button(
+                        "おまかせ生成",
                         variant="primary",
                         scale=3,
-                        elem_id="situation-run",
+                        elem_id="situation-random",
                     )
                     # A sweep is one model call per situation, so it runs long
                     # enough that leaving without a way to stop it would be its
@@ -1682,6 +1746,13 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     cancel_button = gr.Button(
                         "停止", variant="stop", scale=1, elem_id="situation-cancel"
                     )
+                # Two rows rather than four buttons across half the page: at
+                # that width the fourth wrapped onto a line of its own anyway,
+                # and wrapped it was 停止 that got the whole line.
+                with gr.Row():
+                    select_all_button = gr.Button("すべて選択")
+                    clear_button = gr.Button("選択解除")
+                run_button = gr.Button("選んだ分を生成", elem_id="situation-run")
             with gr.Column(scale=3):
                 # First in this column and the progress is drawn on it. Left to
                 # Gradio's own choice it went onto the output boxes, which are
@@ -1769,6 +1840,8 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         select_all_button=select_all_button,
         clear_button=clear_button,
         run_button=run_button,
+        random_button=random_button,
+        random_count=random_count,
         cancel_button=cancel_button,
         view=view,
         shared=shared,

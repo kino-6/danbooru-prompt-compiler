@@ -684,11 +684,13 @@ def test_webui_has_cancel_dependencies_for_every_run_trigger() -> None:
             "run_next_panel",
             "run_scene_prompt",
             "run_situation_sweep",
+            "run_random_situations",
         }
         or (dependency.get("targets") and dependency.get("trigger") == "submit")
     }
-    # 実行, 次のコマ, 自然文プロンプト, instruction submit, and まとめて生成.
-    assert len(cancelled_ids) == 5
+    # 実行, 次のコマ, 自然文プロンプト, instruction submit, 選んだ分を生成,
+    # and おまかせ生成.
+    assert len(cancelled_ids) == 6
     assert run_ids <= cancelled_ids
 
 
@@ -1261,3 +1263,54 @@ def test_the_situation_tab_is_named_for_what_it_produces() -> None:
     assert "比較" not in tab["props"]["label"]
     assert view["props"]["value"] == webui.SHARED_FIRST_VIEW
     assert view["props"]["choices"][0] == ("共通をまとめる", webui.SHARED_FIRST_VIEW)
+
+
+def test_the_random_run_fills_the_controls_before_it_runs() -> None:
+    """A run whose inputs cannot be seen cannot be adjusted and run again.
+
+    So おまかせ writes its picks back into the subject box and the category
+    groups, then runs on them - two events chained rather than one that keeps
+    its choices to itself.
+    """
+    app = build_app()
+    dependencies = app.config["dependencies"]
+    randomize = next(
+        item
+        for item in dependencies
+        if any(
+            component["props"].get("elem_id") == "situation-random"
+            for component in app.config["components"]
+            if component["id"] in [target[0] for target in item.get("targets", [])]
+        )
+        and item.get("api_name") is not False
+    )
+    subject_id = next(
+        component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-subject"
+    )
+    picker_ids = {
+        component["id"]
+        for component in app.config["components"]
+        if str(component["props"].get("elem_id", "")).startswith("situation-picker-")
+    }
+
+    assert subject_id in randomize["outputs"]
+    assert picker_ids <= set(randomize["outputs"])
+
+
+def test_the_random_run_reaches_the_service_the_same_way_the_manual_one_does() -> None:
+    app = build_app()
+    by_name = {
+        item.get("api_name"): item
+        for item in app.config["dependencies"]
+        if item.get("api_name")
+    }
+
+    # Same controls, in the same order: the random path only prepends its own
+    # count and prepends the controls it writes back to. Two lists kept in step
+    # by hand would drift the first time a setting was added to one of them.
+    manual, random_run = by_name["run_situation_sweep"], by_name["run_random_situations"]
+
+    assert random_run["inputs"][1:] == manual["inputs"]
+    assert random_run["outputs"][-len(manual["outputs"]) :] == manual["outputs"]
