@@ -1191,3 +1191,28 @@ def test_nothing_shared_means_the_boxes_are_not_called_differences() -> None:
     assert updates[0]["label"] == "戦闘"
     assert updates[0]["value"] == "holding_weapon"
     assert updates[-1]["visible"] is False
+
+
+def test_the_situation_tab_is_named_for_what_it_produces() -> None:
+    """It generates a prompt per situation; reading them side by side is an aid.
+
+    Named 比較 it described the smaller half of itself, and the default view
+    followed the name: boxes holding only the lines that differ, which are not
+    prompts anyone can paste.
+    """
+    app = build_app()
+    tab = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-tab"
+    )
+    view = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-view"
+    )
+
+    assert "生成" in tab["props"]["label"]
+    assert "比較" not in tab["props"]["label"]
+    assert view["props"]["value"] == "full"
+    assert view["props"]["choices"][0] == ("全文", "full")

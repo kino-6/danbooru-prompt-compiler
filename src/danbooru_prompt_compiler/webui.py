@@ -642,11 +642,10 @@ def compare_situation_runs(
 ) -> SituationComparison:
     """Split a sweep into the part they all share and the part each one adds.
 
-    Run side by side, the answers looked nearly identical - and mostly they
-    were, because the subject is deliberately the same in all of them. What
-    differs is a few lines out of a dozen, and reading a dozen lines to find
-    them is not comparing. So the shared part is said once and each situation
-    keeps only what is its own.
+    This backs the 違いだけ view, which is an aid for reading a set of
+    generated prompts rather than the thing the tab produces. The subject is
+    deliberately the same in every run, so most of every answer is the same and
+    the lines that differ are easy to miss among the ones that do not.
     """
     grids = {
         run.name: _comparable_lines(run.prompt, as_prose)
@@ -1574,15 +1573,17 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
 
 
 def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
-    """One subject through several situations, side by side.
+    """One prompt per situation, from one subject, in one run.
 
-    A situation on its own is already enough to generate from, and the reason to
-    ask for one is almost always to see it against the others - the same
-    character eating breakfast, mid-fight, and halfway through a sentence. That
-    needs neither an image nor a router, so it gets its own tab rather than
+    This generates: the output is a prompt for each situation picked, ready to
+    paste. Reading them against each other is something you may then want to do
+    - 出力の見せかた is there for it - but it is not what the tab is for, and
+    calling the tab a comparison described the smaller half of it.
+
+    It needs neither an image nor a router, so it gets its own tab rather than
     another mode of the workbench, and none of the controls that do not apply.
     """
-    with gr.Tab("シチュエーション比較", elem_id="situation-tab"):
+    with gr.Tab("シチュエーション一括生成", elem_id="situation-tab"):
         gr.Markdown(
             "選んだシチュエーションごとにプロンプトを1件ずつ作ります。"
             "画像は使いません。"
@@ -1654,16 +1655,19 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
             "シチュエーションを選んで「まとめて生成」を押してください。",
             elem_id="situation-status",
         )
-        # The point of running several is the difference between them, and the
-        # difference was a couple of lines inside a dozen identical ones. The
-        # shared part is said once here, above the boxes that differ.
+        # Only filled under 違いだけ, where the shared lines are lifted out of
+        # every box and said once here instead.
+        # 全文 first and by default: what this tab produces is prompts to
+        # paste, and a box holding only the lines that differ is not one.
+        # 違いだけ is for reading the set, which is a second thing you may want
+        # to do with it rather than what it is for.
         view = gr.Radio(
-            choices=[("違いだけ", "diff"), ("全文", "full")],
-            value="diff",
+            choices=[("全文", "full"), ("違いだけ", "diff")],
+            value="full",
             label="出力の見せかた",
             elem_id="situation-view",
-            info="「違いだけ」は各シチュエーション固有の行のみ。"
-            "貼り付け用の全文は「全文」で。",
+            info="「全文」はそのまま貼り付けられる完成形。"
+            "「違いだけ」は共通部分を1つにまとめ、各ボックスには固有の行だけを残します。",
         )
         shared = gr.Textbox(
             label="全シチュエーション共通",
