@@ -1147,36 +1147,48 @@ def test_a_failed_run_is_left_out_of_the_shared_part() -> None:
     assert "magic" not in comparison.distinct
 
 
-def test_the_merged_text_can_be_split_back_into_the_prompts_it_holds() -> None:
+def test_the_merged_text_can_be_split_back_into_the_blocks_it_holds() -> None:
     """Glued together carelessly this would be worse than the boxes it replaced.
 
     So the joining is a stated format, and the function that undoes it is held
     against the one that makes it rather than assumed to match.
     """
-    _shared, merged = webui.merge_situation_runs(TAG_RUNS)
+    _shared, merged = webui.merge_situation_runs(TAG_RUNS, view="full")
 
     assert webui.split_situation_blocks(merged) == [
-        ("戦闘", TAG_RUNS[0].prompt),
-        ("休息", TAG_RUNS[1].prompt),
+        ("1 戦闘", TAG_RUNS[0].prompt),
+        ("2 休息", TAG_RUNS[1].prompt),
     ]
     # A blank line cannot occur inside a prompt, whose own lines are single
     # newlines apart, so it is unambiguous as the boundary.
     assert merged.count("\n\n") == len(TAG_RUNS) - 1
-    assert merged.startswith("# 戦闘\n")
+    assert merged.startswith("# 1 戦闘\n")
 
 
-def test_the_full_view_carries_whole_prompts_and_the_diff_view_the_rest() -> None:
-    shared_full, full = webui.merge_situation_runs(TAG_RUNS, view="full")
-    shared_diff, diff = webui.merge_situation_runs(TAG_RUNS, view="diff")
+def test_the_merged_text_says_the_shared_part_once_at_the_top() -> None:
+    """Written whole it repeated `1girl, solo` and `indoors` in every block.
 
-    # The shared prompt is reported either way - it is asked for in its own
-    # right - but only 違いだけ takes it out of the blocks.
-    assert shared_full == shared_diff == "1girl, solo\nsilver_hair\nelf, bow"
-    assert dict(webui.split_situation_blocks(full))["戦闘"] == TAG_RUNS[0].prompt
-    assert (
-        dict(webui.split_situation_blocks(diff))["戦闘"]
-        == "holding_weapon, dynamic_pose\nfighting_stance"
-    )
+    A set of prompts wants the base once and then the parts, so that is the
+    shape the merged text has by default.
+    """
+    shared, merged = webui.merge_situation_runs(TAG_RUNS)
+    blocks = dict(webui.split_situation_blocks(merged))
+
+    assert merged.startswith("# 共通\n")
+    assert blocks["共通"] == shared == "1girl, solo\nsilver_hair\nelf, bow"
+    assert blocks["1 戦闘"] == "holding_weapon, dynamic_pose\nfighting_stance"
+    assert blocks["2 休息"] == "sitting, holding_book\nrelaxed"
+    # Said once, not once per block.
+    assert merged.count("1girl") == 1
+
+
+def test_the_shared_prompt_is_reported_whichever_shape_was_asked_for() -> None:
+    shared_first, _ = webui.merge_situation_runs(TAG_RUNS)
+    whole, _ = webui.merge_situation_runs(TAG_RUNS, view="full")
+
+    # The box is for lifting out the base on its own, so it is filled either
+    # way; only the merged text changes shape.
+    assert shared_first == whole == "1girl, solo\nsilver_hair\nelf, bow"
 
 
 def test_a_failed_situation_keeps_its_block_and_says_why() -> None:
@@ -1186,7 +1198,7 @@ def test_a_failed_situation_keeps_its_block_and_says_why() -> None:
 
     # Which one failed is the whole of the answer; a missing block would not
     # say, and the blocks have to stay in step with what was asked for.
-    assert dict(webui.split_situation_blocks(merged))["魔法"] == "落ちました"
+    assert dict(webui.split_situation_blocks(merged))["3 魔法"] == "落ちました"
 
 
 def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
@@ -1211,18 +1223,19 @@ def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
     assert dependency["show_progress_on"] == [status_id]
 
 
-def test_nothing_shared_leaves_the_blocks_whole_under_either_view() -> None:
+def test_nothing_shared_means_no_shared_block_is_written() -> None:
     runs = [
         webui.SituationRun("battle", "戦闘", "holding_weapon"),
         webui.SituationRun("rest", "休息", "sitting"),
     ]
 
-    shared, merged = webui.merge_situation_runs(runs, view="diff")
+    shared, merged = webui.merge_situation_runs(runs)
 
-    # Subtracting nothing and presenting the result as a difference would be a
-    # lie about what the text holds.
+    # An empty 共通 block would be a heading over nothing, and the blocks have
+    # had nothing taken out of them.
     assert shared == ""
-    assert dict(webui.split_situation_blocks(merged))["戦闘"] == "holding_weapon"
+    assert "# 共通" not in merged
+    assert dict(webui.split_situation_blocks(merged))["1 戦闘"] == "holding_weapon"
 
 
 def test_the_situation_tab_is_named_for_what_it_produces() -> None:
@@ -1246,5 +1259,5 @@ def test_the_situation_tab_is_named_for_what_it_produces() -> None:
 
     assert "生成" in tab["props"]["label"]
     assert "比較" not in tab["props"]["label"]
-    assert view["props"]["value"] == "full"
-    assert view["props"]["choices"][0] == ("全文", "full")
+    assert view["props"]["value"] == webui.SHARED_FIRST_VIEW
+    assert view["props"]["choices"][0] == ("共通をまとめる", webui.SHARED_FIRST_VIEW)

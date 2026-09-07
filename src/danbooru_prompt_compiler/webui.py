@@ -701,32 +701,46 @@ def split_situation_blocks(merged: str) -> list[tuple[str, str]]:
     return blocks
 
 
+SHARED_BLOCK_LABEL = "共通"
+# 共通 first and then the rest, deduplicated against it, rather than every
+# block carrying the same opening lines over again.
+SHARED_FIRST_VIEW = "shared_first"
+
+
 def merge_situation_runs(
     runs: Sequence[SituationRun],
     *,
     as_prose: bool = False,
-    view: str = "full",
+    view: str = SHARED_FIRST_VIEW,
 ) -> tuple[str, str]:
     """The shared prompt, and every situation merged into one splittable text.
 
     A box per situation meant hunting through up to forty-six of them for the
-    one wanted. What the tab hands back is a shared prompt and a single merged
-    one - glued together carelessly that would be worse than the boxes, so the
-    joining is a stated format with a function to undo it.
+    one wanted, so the answers are one text - and written whole, that text
+    repeated `1girl, solo` and `indoors` in every block. It leads with the
+    shared block instead and each situation keeps only what is its own, which
+    is the structure a set of prompts wants: the base once, then the parts.
+
+    Glued together carelessly this would be worse than the boxes it replaced,
+    so the joining is a stated format with a function to undo it.
     """
     comparison = compare_situation_runs(runs, as_prose=as_prose)
-    # Nothing shared means nothing can be taken out, so 違いだけ has nothing to
-    # show and the blocks stay whole.
-    show_diff = view == "diff" and bool(comparison.shared)
+    # Nothing shared means there is nothing to lift out, so the blocks stay
+    # whole and no 共通 block is written for an empty one.
+    lift_shared = view == SHARED_FIRST_VIEW and bool(comparison.shared)
     blocks = []
-    for run in runs:
+    if lift_shared:
+        blocks.append(situation_block(SHARED_BLOCK_LABEL, comparison.shared))
+    for number, run in enumerate(runs, start=1):
         if run.error:
             body = run.error
-        elif show_diff:
+        elif lift_shared:
             body = comparison.distinct.get(run.name, "") or NOTHING_OF_ITS_OWN
         else:
             body = run.prompt
-        blocks.append(situation_block(run.label, body))
+        # Numbered as well as named: the number says which prompt of the set
+        # this is, the name says which one to reach for.
+        blocks.append(situation_block(f"{number} {run.label}", body))
     return comparison.shared, SITUATION_BLOCK_SEPARATOR.join(blocks)
 
 
@@ -1684,12 +1698,16 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                 # not one. 違いだけ is for reading the set, which is a second
                 # thing you may want to do with it rather than what it is for.
                 view = gr.Radio(
-                    choices=[("全文", "full"), ("違いだけ", "diff")],
-                    value="full",
+                    choices=[
+                        ("共通をまとめる", SHARED_FIRST_VIEW),
+                        ("ブロックごとに完結", "full"),
+                    ],
+                    value=SHARED_FIRST_VIEW,
                     label="出力の見せかた",
                     elem_id="situation-view",
-                    info="「全文」は各ブロックがそのまま貼り付けられる完成形。"
-                    "「違いだけ」は共通部分を抜き、各ブロックに固有の行だけを残します。",
+                    info="「共通をまとめる」は先頭に共通ブロックを置き、"
+                    "以降の各ブロックからその分を除きます。"
+                    "「ブロックごとに完結」は各ブロック単体で完成形になります。",
                 )
                 shared = gr.Textbox(
                     label="共通プロンプト",
@@ -1699,8 +1717,8 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     visible=False,
                     elem_id="situation-shared",
                     info="どのシチュエーションでも同じだった部分です。"
-                    "「全文」では各ブロックにも入っています。"
-                    "「違いだけ」ではこれと各ブロックを合わせて1件分になります。",
+                    "「共通をまとめる」では統合プロンプトの先頭ブロックと同じもので、"
+                    "土台だけを取り出したいとき用です。",
                 )
                 # One text rather than a box per situation: up to forty-six
                 # boxes is not a result anyone reads, it is a haystack. Joined
@@ -1714,8 +1732,10 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     interactive=True,
                     visible=False,
                     elem_id="situation-merged",
-                    info="空行区切り、各ブロックの先頭が「# シチュエーション名」です。"
-                    "空行で分割し、先頭行を外せば1件分のプロンプトになります。",
+                    info="空行区切り、各ブロックの先頭が「# 番号 シチュエーション名」です。"
+                    "空行で分割し、先頭行を外せば各ブロックの中身になります。"
+                    "「共通をまとめる」では、先頭の「# 共通」と各ブロックを"
+                    "合わせて1件分です。",
                 )
                 # Shared rather than one per block: the avoid list comes from
                 # the exclusion rules, so it is the same for every situation.
