@@ -70,7 +70,12 @@ def test_the_direction_says_what_it_governs_before_it_says_anything_else() -> No
     # Led with the situation, a direction this definite reads as the whole brief
     # and the subject disappears - an elf with a bow came back as a battle.
     assert direction.index("何をしているか") < direction.index("Mid-fight")
-    assert "人物・外見・服装・場所は変えず" in direction
+    # Identity is what must survive; the setting, the light and the framing are
+    # the situation's to move, or several situations come back as one picture
+    # with a different verb.
+    assert "「誰か」" in direction
+    assert "変えない" in direction
+    assert "場所・光・構図" in direction
     # Tags are candidates, not a shopping list to empty into the output.
     assert "無理に全部入れない" in direction
     assert "fighting_stance, motion_blur" in direction

@@ -150,6 +150,8 @@ MAX_HISTORY_ITEMS = 20
 # situations/ adds a box without anyone editing the page. The floor only keeps
 # a small set from collapsing the layout.
 MIN_SITUATION_SLOTS = 8
+# What the comparison tab writes prose with unless told otherwise.
+SWEEP_SCENE_TEMPLATE = "scene_illustration"
 MAX_OUTPUT_VARIANTS = 4
 # Prompt boxes 2-4 hold the next-panel proposals that follow box 1.
 NEXT_PANEL_SLOTS = MAX_OUTPUT_VARIANTS - 1
@@ -603,13 +605,90 @@ def run_situation_sweep(
     return runs
 
 
+@dataclass(frozen=True)
+class SituationComparison:
+    """What every situation said, and what each one said on its own."""
+
+    shared: str
+    distinct: dict[str, str]
+
+
+def _comparable_lines(prompt: str, as_prose: bool) -> list[list[str]]:
+    """Each line of a prompt as the units worth comparing it by.
+
+    A tag line compares tag by tag; a prose line compares as the whole
+    sentence, because half a sentence is not a thing anyone can read or paste.
+    """
+    lines = [line.strip() for line in (prompt or "").splitlines() if line.strip()]
+    if as_prose:
+        return [[line] for line in lines]
+    return [
+        [unit.strip() for unit in line.split(",") if unit.strip()] for line in lines
+    ]
+
+
+def _rendered_lines(grid: list[list[str]], keep) -> str:
+    """The grid back as text, with the units that fail `keep` taken out."""
+    lines = []
+    for line in grid:
+        kept = [unit for unit in line if keep(unit)]
+        if kept:
+            lines.append(", ".join(kept))
+    return "\n".join(lines)
+
+
+def compare_situation_runs(
+    runs: Sequence[SituationRun], *, as_prose: bool = False
+) -> SituationComparison:
+    """Split a sweep into the part they all share and the part each one adds.
+
+    Run side by side, the answers looked nearly identical - and mostly they
+    were, because the subject is deliberately the same in all of them. What
+    differs is a few lines out of a dozen, and reading a dozen lines to find
+    them is not comparing. So the shared part is said once and each situation
+    keeps only what is its own.
+    """
+    grids = {
+        run.name: _comparable_lines(run.prompt, as_prose)
+        for run in runs
+        if run.prompt and not run.error
+    }
+    if len(grids) < 2:
+        return SituationComparison(shared="", distinct={})
+    shared = set.intersection(
+        *({unit for line in grid for unit in line} for grid in grids.values())
+    )
+    first = next(iter(grids.values()))
+    return SituationComparison(
+        shared=_rendered_lines(first, lambda unit: unit in shared),
+        distinct={
+            name: _rendered_lines(grid, lambda unit: unit not in shared)
+            for name, grid in grids.items()
+        },
+    )
+
+
 def situation_slots(situations: Sequence[object]) -> int:
     """How many output boxes the page needs for what is on disk."""
     return max(len(situations), MIN_SITUATION_SLOTS)
 
 
-def _situation_updates(gr, runs: list[SituationRun], slots: int):
-    """One box per situation, named by it, hidden where there is nothing."""
+NOTHING_OF_ITS_OWN = "共通部分と同じで、このシチュエーション固有の要素はありませんでした。"
+
+
+def _situation_updates(
+    gr,
+    runs: list[SituationRun],
+    slots: int,
+    *,
+    as_prose: bool = False,
+    view: str = "full",
+):
+    """The boxes and the shared box, either whole or reduced to differences."""
+    comparison = compare_situation_runs(runs, as_prose=as_prose)
+    # Nothing shared means nothing was taken out, so calling the boxes
+    # 「違い」 would be a label for a subtraction that never happened.
+    show_diff = view == "diff" and bool(comparison.shared)
     updates = []
     for index in range(slots):
         if index >= len(runs):
@@ -618,13 +697,20 @@ def _situation_updates(gr, runs: list[SituationRun], slots: int):
         run = runs[index]
         # A failed situation still gets its box: which one failed is the whole
         # of the answer, and an empty slot would not say.
-        updates.append(
-            gr.update(
-                label=run.label if not run.error else f"{run.label}（失敗）",
-                value=run.prompt or run.error,
-                visible=True,
-            )
+        if run.error:
+            label, text = f"{run.label}（失敗）", run.error
+        elif show_diff:
+            label = f"{run.label}（違い）"
+            text = comparison.distinct.get(run.name, "") or NOTHING_OF_ITS_OWN
+        else:
+            label, text = run.label, run.prompt
+        updates.append(gr.update(label=label, value=text, visible=True))
+    updates.append(
+        gr.update(
+            value=comparison.shared if show_diff else "",
+            visible=bool(show_diff and comparison.shared),
         )
+    )
     return updates
 
 
@@ -979,6 +1065,7 @@ def build_app(*, service: WebPromptService | None = None):
             (
                 subject,
                 style,
+                view,
                 template,
                 ollama_url,
                 compiler_model,
@@ -988,18 +1075,21 @@ def build_app(*, service: WebPromptService | None = None):
                 excluded_tags,
             ) = values[len(sweep.pickers) :]
             chosen = [item.name for item in situations if item.name in picks]
+            as_prose = style == "prose"
             if not chosen:
                 return [
                     *(gr.update(value="", visible=False) for _ in sweep.boxes),
                     gr.update(value="", visible=False),
+                    gr.update(value="", visible=False),
                     "シチュエーションを1つ以上選んでください。",
+                    [],
                 ]
             runs = run_situation_sweep(
                 prompt_service,
                 chosen,
                 {item.name: item.label for item in situations},
                 instruction=(subject or "").strip(),
-                as_prose=style == "prose",
+                as_prose=as_prose,
                 options={
                     "ollama_url": ollama_url,
                     "compiler_model": compiler_model,
@@ -1014,8 +1104,13 @@ def build_app(*, service: WebPromptService | None = None):
                 ),
             )
             return [
-                *_situation_updates(gr, runs, len(sweep.boxes)),
+                *_situation_updates(
+                    gr, runs, len(sweep.boxes), as_prose=as_prose, view=view
+                ),
                 *_situation_summary(gr, runs),
+                # Kept so switching between 違いだけ and 全文 re-reads the same
+                # answers instead of asking the models for them again.
+                (runs, as_prose),
             ]
 
         situation_event = sweep.run_button.click(
@@ -1024,6 +1119,7 @@ def build_app(*, service: WebPromptService | None = None):
                 *sweep.pickers,
                 sweep.subject,
                 sweep.output_style,
+                sweep.view,
                 sweep.template,
                 settings.ollama_url,
                 settings.compiler_model,
@@ -1032,9 +1128,32 @@ def build_app(*, service: WebPromptService | None = None):
                 settings.apply_tag_exclusions,
                 settings.excluded_tags,
             ],
-            outputs=[*sweep.boxes, sweep.avoid, sweep.status],
+            outputs=[
+                *sweep.boxes,
+                sweep.shared,
+                sweep.avoid,
+                sweep.status,
+                sweep.runs_state,
+            ],
+            # Drawn on the status line under the button. Left to Gradio's own
+            # choice it went onto the output boxes, which are all hidden on the
+            # first run - so the run that most needs reporting reported nothing.
+            show_progress_on=sweep.status,
             api_name="run_situation_sweep",
             concurrency_limit=1,
+        )
+
+        def handle_situation_view(view: str, state):
+            runs, as_prose = state if state else ([], False)
+            return _situation_updates(
+                gr, runs, len(sweep.boxes), as_prose=as_prose, view=view
+            )
+
+        sweep.view.change(
+            handle_situation_view,
+            inputs=[sweep.view, sweep.runs_state],
+            outputs=[*sweep.boxes, sweep.shared],
+            queue=False,
         )
         sweep.cancel_button.click(
             fn=None, cancels=[situation_event], queue=False
@@ -1485,9 +1604,15 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
                     label="出力形式",
                     elem_id="situation-style",
                 )
+                # A character sheet is the same character rendered neutrally,
+                # so its Lighting and Layout slots ("key light direction",
+                # "framing, camera distance") have nothing to do with the
+                # moment and came back word for word in every situation. A
+                # scene illustration asks about place, time of day and mood,
+                # which is what a situation actually changes.
                 template = gr.Dropdown(
                     choices=[(item.label, item.name) for item in load_templates()],
-                    value=DEFAULT_SCENE_TEMPLATE,
+                    value=SWEEP_SCENE_TEMPLATE,
                     label="自然文プロンプトのテンプレート",
                     visible=False,
                     elem_id="situation-template",
@@ -1518,6 +1643,38 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
             cancel_button = gr.Button(
                 "停止", variant="stop", scale=1, elem_id="situation-cancel"
             )
+        # Directly under the button, and the progress is drawn on it. Left at
+        # the foot of the page it rendered 43px below the fold on a 1100px
+        # viewport, so the first run - the one with every output box still
+        # hidden - appeared to report nothing at all; from the second run on it
+        # landed on the now-visible boxes and looked fine.
+        # It carries a line from the start: an empty Markdown is zero pixels
+        # tall, and the progress is drawn inside it.
+        status = gr.Markdown(
+            "シチュエーションを選んで「まとめて生成」を押してください。",
+            elem_id="situation-status",
+        )
+        # The point of running several is the difference between them, and the
+        # difference was a couple of lines inside a dozen identical ones. The
+        # shared part is said once here, above the boxes that differ.
+        view = gr.Radio(
+            choices=[("違いだけ", "diff"), ("全文", "full")],
+            value="diff",
+            label="出力の見せかた",
+            elem_id="situation-view",
+            info="「違いだけ」は各シチュエーション固有の行のみ。"
+            "貼り付け用の全文は「全文」で。",
+        )
+        shared = gr.Textbox(
+            label="全シチュエーション共通",
+            lines=4,
+            buttons=["copy"],
+            interactive=True,
+            visible=False,
+            elem_id="situation-shared",
+            info="どのシチュエーションでも同じだった部分です。"
+            "「違いだけ」表示のときは、これと各ボックスを合わせて1件分になります。",
+        )
         # One box per situation, named at run time by the situation it holds.
         # Two to a row, like the prompt boxes on the workbench.
         boxes = []
@@ -1544,7 +1701,6 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
             visible=False,
             elem_id="situation-avoid",
         )
-        status = gr.Markdown(elem_id="situation-status")
     return SimpleNamespace(
         subject=subject,
         output_style=output_style,
@@ -1554,9 +1710,12 @@ def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
         clear_button=clear_button,
         run_button=run_button,
         cancel_button=cancel_button,
+        view=view,
+        shared=shared,
         boxes=boxes,
         avoid=avoid,
         status=status,
+        runs_state=gr.State([]),
     )
 
 

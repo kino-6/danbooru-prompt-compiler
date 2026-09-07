@@ -111,8 +111,16 @@ def situation_direction(
     # was taken as one: an elf with a bow in a battle came back as a battle with
     # no elf. What the situation governs is named before the situation itself.
     lines = [
-        "状況の指定。人物・外見・服装・場所は変えず、"
-        "「何をしているか」だけをこれに合わせる: " + situation.guidance.strip()
+        # What has to survive is who the character is. Freezing the setting and
+        # the light along with them was too much: run through several
+        # situations the answers came back as the same picture with a different
+        # verb - "a simple cloak", "centered in the frame", "warm light from
+        # the left" every time - because nothing but the pose was allowed to
+        # follow the situation.
+        "状況の指定。この人物が「誰か」——顔立ち・髪・体型・その人を識別する特徴——は変えない。"
+        "それ以外、つまり何をしているか・場所・光・構図、"
+        "および状況が必要とする範囲の服装や持ち物は、これに合わせる: "
+        + situation.guidance.strip()
     ]
     if situation.tags and with_tags:
         # Candidates rather than requirements: the scene decides which of them

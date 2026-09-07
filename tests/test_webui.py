@@ -1084,3 +1084,110 @@ def test_the_situation_template_only_appears_for_prose() -> None:
 
     # Tags are the default, and a prose template means nothing to them.
     assert template["props"]["visible"] is False
+
+
+TAG_RUNS = [
+    webui.SituationRun(
+        "battle",
+        "戦闘",
+        "1girl, solo\nsilver_hair\nholding_weapon, dynamic_pose\nelf, bow, fighting_stance",
+    ),
+    webui.SituationRun(
+        "rest",
+        "休息",
+        "1girl, solo\nsilver_hair\nsitting, holding_book\nelf, bow, relaxed",
+    ),
+]
+
+
+def test_a_comparison_says_the_shared_part_once() -> None:
+    """Side by side the answers looked identical, and mostly they were.
+
+    The subject is deliberately the same in every run, so what differs is a few
+    tags inside a dozen - and reading a dozen to find them is not comparing.
+    """
+    comparison = webui.compare_situation_runs(TAG_RUNS)
+
+    assert comparison.shared == "1girl, solo\nsilver_hair\nelf, bow"
+    assert comparison.distinct["battle"] == "holding_weapon, dynamic_pose\nfighting_stance"
+    assert comparison.distinct["rest"] == "sitting, holding_book\nrelaxed"
+
+
+def test_a_comparison_of_prose_keeps_whole_sentences() -> None:
+    runs = [
+        webui.SituationRun("battle", "戦闘", "An elf with a bow.\nMid-fight, weight forward."),
+        webui.SituationRun("rest", "休息", "An elf with a bow.\nSlouched on a bench."),
+    ]
+
+    comparison = webui.compare_situation_runs(runs, as_prose=True)
+
+    # Half a sentence is not something anyone can read or paste, so prose
+    # compares line by line rather than word by word.
+    assert comparison.shared == "An elf with a bow."
+    assert comparison.distinct["battle"] == "Mid-fight, weight forward."
+
+
+def test_one_run_alone_has_nothing_to_compare_against() -> None:
+    comparison = webui.compare_situation_runs(TAG_RUNS[:1])
+
+    assert comparison.shared == ""
+    assert comparison.distinct == {}
+
+
+def test_a_failed_run_is_left_out_of_the_shared_part() -> None:
+    runs = [*TAG_RUNS, webui.SituationRun("magic", "魔法", error="落ちました")]
+
+    comparison = webui.compare_situation_runs(runs)
+
+    # Otherwise one failure empties the shared set and every box goes back to
+    # being the whole prompt.
+    assert comparison.shared == "1girl, solo\nsilver_hair\nelf, bow"
+    assert "magic" not in comparison.distinct
+
+
+def test_the_diff_view_shows_differences_and_the_full_view_shows_prompts() -> None:
+    diff = webui._situation_updates(gradio, TAG_RUNS, 4, view="diff")
+    full = webui._situation_updates(gradio, TAG_RUNS, 4, view="full")
+
+    assert diff[0]["value"] == "holding_weapon, dynamic_pose\nfighting_stance"
+    assert diff[-1]["visible"] is True  # the shared box
+    assert diff[-1]["value"] == "1girl, solo\nsilver_hair\nelf, bow"
+    assert full[0]["value"] == TAG_RUNS[0].prompt
+    assert full[-1]["visible"] is False
+
+
+def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
+    """The first run happens with every output box still hidden.
+
+    Left to Gradio's own choice the progress rendered at the foot of the page -
+    measured at top=1143px in a 1100px viewport - so the first run appeared to
+    report nothing, while later runs drew onto the by-then-visible boxes.
+    """
+    app = build_app()
+    dependency = next(
+        item
+        for item in app.config["dependencies"]
+        if item.get("api_name") == "run_situation_sweep"
+    )
+    status_id = next(
+        component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-status"
+    )
+
+    assert dependency["show_progress_on"] == [status_id]
+
+
+def test_nothing_shared_means_the_boxes_are_not_called_differences() -> None:
+    runs = [
+        webui.SituationRun("battle", "戦闘", "holding_weapon"),
+        webui.SituationRun("rest", "休息", "sitting"),
+    ]
+
+    updates = webui._situation_updates(gradio, runs, 2, view="diff")
+
+    # Subtracting nothing and labelling the result a difference is a lie about
+    # what the box holds.
+    assert updates[0]["label"] == "戦闘"
+    assert updates[0]["value"] == "holding_weapon"
+    assert updates[-1]["visible"] is False
