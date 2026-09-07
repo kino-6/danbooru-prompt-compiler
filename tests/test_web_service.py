@@ -1371,3 +1371,55 @@ def test_nothing_at_all_is_still_refused_and_says_what_would_do() -> None:
         service.run(image_path=None, instruction="", base_prompt="")
 
     assert "シチュエーション" in str(error.value)
+
+
+def test_a_situation_alone_is_enough_for_a_prose_prompt() -> None:
+    """The control says so, so the prose button has to honour it.
+
+    Picking 休息・くつろぎ and pressing 自然文プロンプト used to be refused with
+    "画像・指示・既存プロンプトのいずれかが必要です" - the one thing the
+    control's own hint invites was the one thing it rejected.
+    """
+    client = RecordingTextClient(["Subject: someone resting"])
+    service = WebPromptService(
+        tagger=EmptyTagger(),
+        text_factory=lambda _url, _model: client,
+        scene_templates=SCENE_TEMPLATES,
+        situations=SITUATIONS,
+    )
+
+    result = service.run(
+        image_path=None,
+        instruction="",
+        base_prompt="",
+        situation="battle",
+        action_override="scene_prompt",
+        use_vision=False,
+    )
+
+    assert result.candidates
+    # And it is not merely tolerated: the model is told what to depict.
+    assert "Mid-fight" in client.last_request.prompt
+
+
+def test_a_prose_prompt_keeps_the_subject_above_the_situation() -> None:
+    client = RecordingTextClient(["Subject: an elf"])
+    service = WebPromptService(
+        tagger=EmptyTagger(),
+        text_factory=lambda _url, _model: client,
+        scene_templates=SCENE_TEMPLATES,
+        situations=SITUATIONS,
+    )
+
+    service.run(
+        image_path=None,
+        instruction="弓を持ったエルフ",
+        base_prompt="",
+        situation="battle",
+        action_override="scene_prompt",
+        use_vision=False,
+    )
+
+    request = client.last_request.prompt
+    assert "弓を持ったエルフ" in request
+    assert request.index("弓を持ったエルフ") < request.index("Mid-fight")

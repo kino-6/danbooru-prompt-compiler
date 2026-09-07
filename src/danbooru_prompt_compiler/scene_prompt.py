@@ -71,6 +71,7 @@ def build_scene_prompt(
     instruction: str,
     base_prompt: str,
     avoid_terms: list[str],
+    situation_guidance: str = "",
     sees_image: bool = False,
 ) -> str:
     """The request handed to the model, one section per template slot.
@@ -95,6 +96,9 @@ def build_scene_prompt(
         _labelled("Description of the reference image", image_description),
         _labelled("Existing prompt", base_prompt),
         _labelled("User request", instruction),
+        # Last of the known material, because it is the weakest claim on the
+        # scene: it says what is happening, never who it happens to.
+        _labelled("Situation to depict", situation_guidance),
     ]
     return "\n".join(
         part

@@ -788,6 +788,9 @@ class WebPromptService:
             variants=options.variants,
             ollama_url=options.ollama_url,
             scene_model=options.scene_model or options.compiler_model,
+            situation_guidance=_subordinate(
+                context.situation, context.instruction or context.base_prompt
+            ),
             image_path=options.image_path if options.scene_sees_image else "",
         )
         result = WebRunResult(
@@ -891,11 +894,18 @@ class WebPromptService:
         variants: int,
         ollama_url: str,
         scene_model: str,
+        situation_guidance: str = "",
         image_path: str = "",
     ) -> list[str]:
-        if not image_tags and not image_description and not instruction and not base_prompt:
+        # A situation counts as material. The control says a situation alone is
+        # enough to generate from, and it has to be true here too or the button
+        # refuses the one thing its own hint invites.
+        if not any(
+            (image_tags, image_description, instruction, base_prompt, situation_guidance)
+        ):
             raise ValueError(
-                "自然文プロンプトには、画像・指示・既存プロンプトのいずれかが必要です。"
+                "自然文プロンプトには、画像・指示・既存プロンプト・"
+                "シチュエーションのいずれかが必要です。"
             )
 
         template = find_template(scene_template, self.scene_templates)
@@ -911,6 +921,7 @@ class WebPromptService:
             instruction=instruction,
             base_prompt=base_prompt,
             avoid_terms=avoid_terms,
+            situation_guidance=situation_guidance,
             sees_image=bool(image_path),
         )
         client = self.text_factory(ollama_url, scene_model)
