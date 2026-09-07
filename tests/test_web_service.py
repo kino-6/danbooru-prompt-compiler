@@ -10,6 +10,7 @@ from danbooru_prompt_compiler.image_tagger import (
 )
 from danbooru_prompt_compiler.models import CompileResult, LLMResponse
 from danbooru_prompt_compiler.scene_prompt import SceneTemplate
+from danbooru_prompt_compiler.situation import Situation
 from danbooru_prompt_compiler.web_router import ActionPlan, RoutedPlan, WebAction
 from danbooru_prompt_compiler.web_service import (
     WEB_RUN_FIELDS,
@@ -1299,3 +1300,73 @@ def test_without_chaining_the_panels_stay_alternatives_for_one_moment() -> None:
     result = service.run(**_panel_options(action_override="next_panel", variants=2))
 
     assert "コマ目" not in result.panel_note
+
+
+SITUATIONS = [
+    Situation(
+        name="battle",
+        label="戦闘",
+        guidance="Mid-fight: a weapon already in motion.",
+        tags=["fighting_stance"],
+    )
+]
+
+
+def _situation_service(compiler) -> WebPromptService:
+    return WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.compile, variants=1)
+        ),
+        compiler_factory=lambda _url, _model: compiler,
+        situations=SITUATIONS,
+    )
+
+
+def test_a_situation_is_enough_to_generate_from_on_its_own() -> None:
+    compiler = FakeCompiler()
+    service = _situation_service(compiler)
+
+    service.run(image_path=None, instruction="", base_prompt="", situation="battle")
+
+    assert "Mid-fight: a weapon already in motion." in (
+        compiler.last_request.situation_guidance
+    )
+
+
+def test_a_situation_says_what_is_happening_not_who_it_happens_to() -> None:
+    compiler = FakeCompiler()
+    service = _situation_service(compiler)
+
+    service.run(
+        image_path=None,
+        instruction="弓を持つエルフの少女",
+        base_prompt="",
+        situation="battle",
+    )
+
+    guidance = compiler.last_request.situation_guidance
+    # Without this the subject went: an elf with a bow in a battle came back as
+    # a battle and no elf.
+    assert guidance.index("これは変更しない") < guidance.index("Mid-fight")
+    assert "弓を持つエルフの少女" in guidance
+    # The subject stays the scene rather than being folded into the direction.
+    assert compiler.last_request.scene_description == "弓を持つエルフの少女"
+
+
+def test_no_situation_leaves_the_request_exactly_as_it_was() -> None:
+    compiler = FakeCompiler()
+    service = _situation_service(compiler)
+
+    service.run(image_path=None, instruction="雨の神社", base_prompt="")
+
+    assert compiler.last_request.situation_guidance == ""
+
+
+def test_nothing_at_all_is_still_refused_and_says_what_would_do() -> None:
+    service = _situation_service(FakeCompiler())
+
+    with pytest.raises(ValueError) as error:
+        service.run(image_path=None, instruction="", base_prompt="")
+
+    assert "シチュエーション" in str(error.value)

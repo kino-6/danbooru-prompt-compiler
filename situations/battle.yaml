@@ -1,0 +1,12 @@
+label: 戦闘
+order: 20
+guidance: >-
+  Mid-fight: a weapon or fist already in motion, weight thrown into a stance,
+  the body committed to a blow or to avoiding one. Not a hero standing still
+  holding a sword.
+tags:
+  - fighting_stance
+  - holding_weapon
+  - motion_blur
+  - clenched_teeth
+  - dutch_angle

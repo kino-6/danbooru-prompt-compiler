@@ -44,6 +44,13 @@ from .scene_prompt import (
     load_templates,
     render_scene_prompt,
 )
+from .situation import (
+    NO_SITUATION,
+    Situation,
+    find_situation,
+    load_situations,
+    situation_direction,
+)
 from .tag_dictionary import load_or_fetch_tag_dictionary
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
@@ -159,6 +166,9 @@ class RunOptions(BaseModel):
     # shells out, and a library caller should not pay for that on every run.
     # The Web UI asks for it, which is where the setting lives.
     gpu_wait_gb: float = 0.0
+    # What is going on in the picture. Enough to generate from on its own, and a
+    # steer for whatever else the run was given.
+    situation: str = NO_SITUATION
 
 
 class WebRunRequest(RunOptions):
@@ -348,6 +358,10 @@ class RunContext:
 
     routed: RoutedPlan
     instruction: str
+    # What kind of moment this is, in words. Carried apart from the instruction
+    # because the router writes its own scene description over that, and the
+    # direction would go with it.
+    situation: str
     base_prompt: str
     edited_tags: str
     exclusion_rules: list[str]
@@ -409,6 +423,7 @@ class WebPromptService:
         vision_factory: Callable[[str, str], LLMClient] | None = None,
         text_factory: Callable[[str, str], LLMClient] | None = None,
         scene_templates: list[SceneTemplate] | None = None,
+        situations: list[Situation] | None = None,
         known_tags: set[str] | None = None,
     ) -> None:
         self.tagger = tagger or ImageTagger()
@@ -420,6 +435,9 @@ class WebPromptService:
         self.vision_factory = vision_factory or _default_vision_factory
         self.text_factory = text_factory or _default_text_factory
         self.scene_templates = scene_templates if scene_templates is not None else load_templates()
+        self.situations = (
+            situations if situations is not None else load_situations()
+        )
         # Loading the dictionary is the only reason a tag review would need a
         # compiler, so it is read on its own and only when something asks.
         self._known_tags = known_tags
@@ -445,10 +463,28 @@ class WebPromptService:
             if run_options.apply_tag_exclusions
             else []
         )
-        if not run_options.image_path and not clean_instruction and not clean_base_prompt and not clean_edited_tags:
-            raise ValueError("画像、指示、または既存プロンプトを入力してください。")
+        # A situation is enough on its own: "a battle" is a picture to make even
+        # with nothing else said.
+        situation = find_situation(run_options.situation, self.situations)
+        if (
+            not run_options.image_path
+            and not clean_instruction
+            and not clean_base_prompt
+            and not clean_edited_tags
+            and situation is None
+        ):
+            raise ValueError(
+                "画像、指示、既存プロンプト、またはシチュエーションを指定してください。"
+            )
+        # Routing sees the situation as part of what was asked, so a situation
+        # alone reads as a request to make something rather than as silence.
+        routed_instruction = "\n".join(
+            part for part in (clean_instruction, situation_direction(situation)) if part
+        )
         route_request = RouteRequest(
-            instruction=clean_instruction,
+            # The router sees the situation too, or a situation on its own reads
+            # as silence and gets routed to editing something that is not there.
+            instruction=routed_instruction,
             base_prompt=clean_base_prompt,
             has_image=bool(run_options.image_path),
             default_variants=run_options.variants,
@@ -512,6 +548,7 @@ class WebPromptService:
         context = RunContext(
             routed=routed,
             instruction=clean_instruction,
+            situation=situation_direction(situation),
             base_prompt=clean_base_prompt,
             edited_tags=clean_edited_tags,
             exclusion_rules=exclusion_rules,
@@ -619,6 +656,7 @@ class WebPromptService:
                 instruction=clean_instruction,
                 base_prompt=clean_base_prompt,
                 inferred_tags=inferred_names,
+                situation=context.situation,
                 vision_observation=vision_observation,
                 exclusion_rules=exclusion_rules,
                 next_panel_change=next_panel_change,
@@ -1321,12 +1359,28 @@ def _exclude_variant_tags(
     return kept_variants, list(dict.fromkeys(excluded))
 
 
+def _subordinate(situation: str, subject: str) -> str:
+    """The situation, ranked under whatever the user actually described.
+
+    A direction as definite as "mid-fight, a weapon already in motion" replaces
+    the subject rather than moving it: asked for an elf with a bow in a battle,
+    the compiler returned the battle and no elf. The situation says what is
+    happening; it never says who it happens to.
+    """
+    if not situation or not (subject or "").strip():
+        return situation
+    # Named before the direction rather than after it: a note at the end reads
+    # as an afterthought next to five concrete tags, and lost every time.
+    return f"シーンの主題は「{subject.strip()}」で、これは変更しない。\n{situation}"
+
+
 def _build_compile_request(
     plan: ActionPlan,
     *,
     instruction: str,
     base_prompt: str,
     inferred_tags: list[str],
+    situation: str = "",
     vision_observation: str = "",
     exclusion_rules: list[str] | None = None,
     next_panel_change: float = DEFAULT_NEXT_PANEL_CHANGE,
@@ -1334,8 +1388,16 @@ def _build_compile_request(
 ) -> CompileRequest:
     exclusion_rules = exclusion_rules or []
     if plan.action == WebAction.compile:
+        # The situation is appended rather than folded into the instruction: the
+        # router writes its own scene description over the instruction, and the
+        # direction would be thrown away with it.
+        described = plan.scene_description or instruction
         return CompileRequest(
-            scene_description=plan.scene_description or instruction,
+            # The subject stays the scene. The situation is guidance beside it:
+            # written into the description it replaced the subject rather than
+            # moving it - an elf with a bow in a battle came back as a battle.
+            scene_description=described,
+            situation_guidance=_subordinate(situation, described),
             variants=plan.variants,
             input_type=InputType.scene,
             excluded_tags=exclusion_rules,
@@ -1346,6 +1408,11 @@ def _build_compile_request(
         raise ValueError("編集または次コマ生成には、画像か既存プロンプトが必要です。")
 
     edit_instruction = plan.edit_instruction or instruction
+    if situation:
+        direction = _subordinate(situation, edit_instruction)
+        edit_instruction = (
+            f"{edit_instruction}\n{direction}" if edit_instruction else direction
+        )
     if vision_observation:
         edit_instruction = (
             f"{edit_instruction}\n"
@@ -1376,6 +1443,7 @@ def _build_compile_request(
 
     return CompileRequest(
         scene_description=source_tags,
+        situation_guidance=_subordinate(situation, edit_instruction or source_tags),
         variants=plan.variants,
         mode=mode,
         input_type=InputType.prompt,

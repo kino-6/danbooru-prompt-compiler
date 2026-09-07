@@ -171,6 +171,12 @@ Two sliders describe the panel to ask for, because one was doing the work of bot
 
 An image with no instruction is otherwise routed to plain tag extraction, so the main controls also carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and fills all four boxes with panels at the selected change amount.
 
+`シチュエーション` says what kind of moment the picture is - 日常のふるまい, 戦闘, 会話・対話, 移動・旅, 休息・くつろぎ, 感情の高まり. It works two ways: on its own it is enough to generate from, and beside an instruction or an image it steers what is already there.
+
+It is guidance, never the scene. Written into the scene description it replaced the subject rather than moving it - asked for an elf with a bow in a battle, the compiler returned a battle and no elf - so the subject is named first and the direction is told it governs only what the character is doing. Its tags are candidates the compiler may use, bounded by the dictionary like everything else.
+
+Situations are plain YAML in `situations/`; drop a file in with `label`, `guidance`, optional `tags` and `order`, and it appears in the dropdown on the next launch. They are a different axis from `presets/`, which says how an image should be rendered rather than what is happening in it.
+
 `英文プロンプトも出す` writes the same result a second way, as the English prose newer image models take, into boxes of its own under the tags. Two of them, because that is what goes into an image model: `英文プロンプト（貼り付け用）` is the body with the labels stripped - `Subject:` and the rest are how the prompt was written, and a model reads them as words. The sub-headings a model writes inside a section go too: the template's guidance is a list of what to cover (`outfit, layers, accessories`) and the answer often repeats each word as a label, which is the same noise one level down. A colon that is not a label, such as an aspect ratio, is left alone. The line breaks stay: run into one paragraph the result is still a valid prompt, but the sections can no longer be told apart, and telling them apart is what makes the output worth editing afterwards. The box is and `除外（ネガティブプロンプト）` is the avoid list, which every image model takes separately from the description. The labelled form is kept under `実行の詳細` for checking the writing, not for pasting. It is a separate box rather than one of the four because they are two readings of one result, not two results competing for a slot. It costs another model call, so it is off unless asked for - the Web UI asks by default and remembers if you turn it off. A prose step that fails costs the prose and never the tags, with the reason in the status line.
 
 Under the prompt boxes, the same groups the output is already organized into appear as separate copyable boxes - 人物, 外見, 服装, ポーズ, 情景, 画風, 構図, その他 - so a prompt can be reused piecewise: the character without the scene, the clothing without the pose. They are read back from prompt box 1 rather than kept from the run, so editing that box or adopting a candidate re-splits what you can see, and a group with nothing in it does not appear.
@@ -493,6 +499,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `next_panel.py`: the moment after the current panel, bounded by the dictionary.
 - `gpu_watch.py`: whether another program is on the card, and how long to wait for it.
 - `settings_store.py`: the Web UI settings that survive a restart, and the work that does not.
+- `situation.py`: what kind of moment the picture is, as a direction rather than a scene.
 - `tag_review.py`: dictionary-bounded review of inferred tags against the image.
 - `tag_subset.py`: Danbooru post-based subset loading, fetching, and writing.
 - `models.py`: Pydantic request/response models.

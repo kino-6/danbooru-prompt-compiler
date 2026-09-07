@@ -12,6 +12,7 @@ from .normalizer import normalize_tags, parse_tag_text
 from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
 from .scene_prompt import load_templates
 from .settings_store import load_settings, remembered, save_settings
+from .situation import NO_SITUATION, load_situations, situation_choices
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -61,7 +62,7 @@ TASKS: tuple[Task, ...] = (
         "おまかせ（指示から判断）",
         frozenset(
             {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
-             "variants", "run", "next_panel"}
+             "variants", "run", "next_panel", "situation"}
         ),
     ),
     # Tagging is pure ONNX: no instruction to give, no model to describe with.
@@ -69,13 +70,14 @@ TASKS: tuple[Task, ...] = (
     Task(
         "compile",
         "テキストからプロンプト",
-        frozenset({"instruction", "follow_up", "variants", "run"}),
+        frozenset({"instruction", "follow_up", "variants", "run", "situation"}),
     ),
     Task(
         "edit",
         "既存プロンプトを編集",
         frozenset(
-            {"vision", "instruction", "base_prompt", "follow_up", "variants", "run"}
+            {"vision", "instruction", "base_prompt", "follow_up", "variants", "run",
+             "situation"}
         ),
     ),
     # base_prompt earns its place here: a next panel can be asked for from a
@@ -85,7 +87,7 @@ TASKS: tuple[Task, ...] = (
         "次のコマ",
         frozenset(
             {"vision", "instruction", "base_prompt", "panel_change", "variants",
-             "next_panel"}
+             "next_panel", "situation"}
         ),
     ),
     Task(
@@ -93,7 +95,7 @@ TASKS: tuple[Task, ...] = (
         "自然文プロンプト",
         frozenset(
             {"vision", "instruction", "base_prompt", "variants", "scene_template",
-             "scene_settings", "scene_prompt"}
+             "scene_settings", "scene_prompt", "situation"}
         ),
     ),
     # The review reads the description as context but takes no instruction, and
@@ -114,6 +116,7 @@ TASK_FIELD_ORDER: tuple[str, ...] = (
     "panel_change",
     "variants",
     "scene_template",
+    "situation",
     "scene_settings",
     "run",
     "next_panel",
@@ -587,6 +590,7 @@ def build_app(*, service: WebPromptService | None = None):
             "panel_change": [controls.next_panel_box],
             "variants": [controls.variants_box],
             "scene_template": [controls.scene_template],
+            "situation": [controls.situation],
             "scene_settings": [settings.scene_settings_box],
             "run": [controls.run_button],
             "next_panel": [controls.next_panel_button],
@@ -853,6 +857,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "next_panel_time": controls.next_panel_time,
         "next_panel_chain": controls.next_panel_chain,
         "scene_template": controls.scene_template,
+        "situation": controls.situation,
         "scene_model": settings.scene_model,
         "scene_sees_image": settings.scene_sees_image,
         "also_prose": controls.also_prose,
@@ -1017,7 +1022,17 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
                 value=remembered(stored, "variants", 4),
                 label="出力数",
                 container=False,
-                scale=4,
+                scale=2,
+            )
+            # Same visibility as the output count, and the same kind of choice
+            # about this run, so it shares the line rather than costing another.
+            situation = gr.Dropdown(
+                choices=situation_choices(load_situations()),
+                value=remembered(stored, "situation", NO_SITUATION),
+                label="シチュエーション",
+                elem_id="situation-input",
+                container=False,
+                scale=3,
             )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
@@ -1045,6 +1060,7 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
         next_panel_chain=next_panel_chain,
         next_panel_box=next_panel_box,
         scene_template=scene_template,
+        situation=situation,
         scene_prompt_button=scene_prompt_button,
         run_button=run_button,
         next_panel_button=next_panel_button,
