@@ -489,11 +489,16 @@ class WebPromptService:
             has_image=bool(run_options.image_path),
             default_variants=run_options.variants,
         )
+        # Said before the GPU check, which reaches out over the network and can
+        # then hold for a further two minutes; without this the page sits blank
+        # through the one stretch of a run that most looks like a hang.
+        _report_progress(on_progress, "preparing", 0.02)
         # A run that starts while something else holds the card does not fail,
         # it crawls, so it is worth waiting a little before asking anything.
         gpu_note = wait_for_gpu(
             run_options.ollama_url,
             limit_mib=int(run_options.gpu_wait_gb * 1024),
+            on_wait=lambda: _report_progress(on_progress, "gpu_wait", 0.03),
         )
         _report_progress(on_progress, "routing", 0.05)
         if run_options.action_override == "auto":

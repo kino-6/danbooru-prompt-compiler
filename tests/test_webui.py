@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import inspect
+import re
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from danbooru_prompt_compiler import webui
+from danbooru_prompt_compiler import web_service, webui
 from danbooru_prompt_compiler.web_service import (
     WEB_RUN_FIELDS,
     WebRunRequest,
@@ -868,3 +871,43 @@ def test_the_prose_arrives_ready_to_paste_with_its_negative_beside_it() -> None:
     # so it sits behind the collapsed panel rather than on the page.
     assert components["英文プロンプト（テンプレート形式）"]["props"]["visible"] is not False
     assert components["英文プロンプトも出す"]["props"]["value"] is True
+
+
+def test_every_progress_handler_is_one_gradio_actually_wires_up() -> None:
+    """A progress parameter Gradio does not see is a silent dead end.
+
+    gradio.helpers.special_args reads the signature from the left and stops at
+    the first non-positional parameter, so `*values, progress=gr.Progress()`
+    yields no progress index: the handler receives an unwired Progress, every
+    report vanishes, and the page shows only Gradio's own "processing | 47.2s".
+    """
+    from gradio.helpers import special_args
+
+    app = build_app()
+    handlers = [
+        block_fn.fn
+        for block_fn in app.fns.values()
+        if block_fn.fn is not None
+        and any(
+            isinstance(parameter.default, gradio.Progress)
+            for parameter in inspect.signature(block_fn.fn).parameters.values()
+        )
+    ]
+
+    assert handlers, "no handler asks for progress at all"
+    for handler in handlers:
+        assert special_args(handler)[1] is not None, (
+            f"{handler.__name__} takes a Progress that gradio will not wire up"
+        )
+
+
+def test_the_progress_stages_the_service_reports_all_have_labels() -> None:
+    reported = set(
+        re.findall(
+            r'_report_progress\(\s*on_progress,\s*"([a-z_]+)"',
+            Path(web_service.__file__).read_text(encoding="utf-8"),
+        )
+    )
+
+    assert reported, "no progress reports found in the service"
+    assert reported <= set(webui.PROGRESS_LABELS)

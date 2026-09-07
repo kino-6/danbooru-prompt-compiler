@@ -774,6 +774,7 @@ def test_service_reports_ordered_progress_phases() -> None:
     )
 
     assert [stage for stage, _ in stages] == [
+        "preparing",
         "routing",
         "tagging",
         "vision",

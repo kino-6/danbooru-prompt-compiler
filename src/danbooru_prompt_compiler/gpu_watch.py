@@ -90,6 +90,7 @@ def wait_for_gpu(
     timeout: float = DEFAULT_WAIT_TIMEOUT,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     client: httpx.Client | None = None,
+    on_wait: Callable[[], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
 ) -> str:
@@ -109,6 +110,10 @@ def wait_for_gpu(
     if foreign is None or foreign <= limit_mib:
         return ""
 
+    # The caller only hears about the wait once it is certain to happen, so a
+    # run that sails through never flashes a message about waiting.
+    if on_wait is not None:
+        on_wait()
     started = now()
     while True:
         sleep(poll_seconds)

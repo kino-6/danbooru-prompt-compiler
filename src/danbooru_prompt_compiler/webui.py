@@ -131,6 +131,8 @@ def task_field_visibility(task: str) -> list[bool]:
 
 
 PROGRESS_LABELS = {
+    "preparing": "準備しています",
+    "gpu_wait": "他タスクのGPU使用が収まるのを待っています",
     "routing": "指示を解釈しています",
     "tagging": "画像タグを推測しています",
     "vision": "VLMで構図を確認しています",
@@ -558,13 +560,18 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.history,
         )
 
-    def handle_request(*values, progress=gr.Progress()):
+    # gradio.helpers.special_args reads the signature from the left and stops at
+    # the first parameter that is not positional, so a trailing keyword-only
+    # progress is never recognised: the handler then gets an unwired Progress
+    # whose calls go nowhere, and the browser shows only "processing | 47.2s".
+    # Leading it is what gets the reports onto the queue.
+    def handle_request(progress=gr.Progress(), *values):
         return dispatch(values, progress)
 
-    def handle_scene_prompt(*values, progress=gr.Progress()):
+    def handle_scene_prompt(progress=gr.Progress(), *values):
         return dispatch(values, progress, action_override="scene_prompt")
 
-    def handle_next_panel(*values, progress=gr.Progress()):
+    def handle_next_panel(progress=gr.Progress(), *values):
         # An image alone is enough here; the router would otherwise read a
         # missing instruction as a request for plain tag extraction.
         return dispatch(values, progress, action_override="next_panel")
