@@ -1022,18 +1022,19 @@ def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
                 value=remembered(stored, "variants", 4),
                 label="出力数",
                 container=False,
-                scale=2,
+                scale=4,
             )
-            # Same visibility as the output count, and the same kind of choice
-            # about this run, so it shares the line rather than costing another.
-            situation = gr.Dropdown(
-                choices=situation_choices(load_situations()),
-                value=remembered(stored, "situation", NO_SITUATION),
-                label="シチュエーション",
-                elem_id="situation-input",
-                container=False,
-                scale=3,
-            )
+        # Its own line, with its own label. Sharing the output count's row saved
+        # 43px and cost the control its name - container=False takes the label
+        # with it - so it read as an unexplained box belonging to 出力数, whose
+        # own choices it pushed onto a second line.
+        situation = gr.Dropdown(
+            choices=situation_choices(load_situations()),
+            value=remembered(stored, "situation", NO_SITUATION),
+            label="シチュエーション",
+            elem_id="situation-input",
+            info="日常・戦闘などの方向づけ。これだけでも生成できます。",
+        )
         with gr.Row():
             run_button = gr.Button("実行", variant="primary")
             next_panel_button = gr.Button(
