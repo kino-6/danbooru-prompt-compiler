@@ -16,7 +16,7 @@ from .formatter import (
     format_variant,
     group_tags,
 )
-from .gpu_watch import DEFAULT_FOREIGN_LIMIT_MIB, wait_for_gpu
+from .gpu_watch import DEFAULT_FOREIGN_LIMIT_MIB, gpu_is_busy, wait_for_gpu
 from .image_tagger import (
     CHARACTER_CATEGORY,
     GENERAL_CATEGORY,
@@ -112,6 +112,14 @@ SCENE_PROMPT_TEMPERATURE = 0.6
 # The floor for asking a deterministic band for more than one panel at once.
 MULTI_PANEL_TEMPERATURE = 0.5
 DEFAULT_GPU_WAIT_GB = DEFAULT_FOREIGN_LIMIT_MIB / 1024
+GPU_BUSY_CPU = "cpu"
+GPU_BUSY_WAIT = "wait"
+GPU_BUSY_IGNORE = "ignore"
+GPU_BUSY_CHOICES: tuple[tuple[str, str], ...] = (
+    ("CPUで実行（遅いが待たない）", GPU_BUSY_CPU),
+    ("空くまで待つ（最大2分）", GPU_BUSY_WAIT),
+    ("気にせずGPUで実行", GPU_BUSY_IGNORE),
+)
 # The first template on disk, so the request model and the UI dropdown agree.
 DEFAULT_SCENE_TEMPLATE = next((template.name for template in load_templates()), "")
 ProgressCallback = Callable[[str, float], None]
@@ -162,10 +170,16 @@ class RunOptions(BaseModel):
     vision_model: str = DEFAULT_VISION_MODEL
     apply_tag_exclusions: bool = True
     excluded_tags: str = DEFAULT_EXCLUSION_TEXT
-    # Zero turns the wait off, which is the default here: probing the card
+    # Zero turns the check off, which is the default here: probing the card
     # shells out, and a library caller should not pay for that on every run.
     # The Web UI asks for it, which is where the setting lives.
     gpu_wait_gb: float = 0.0
+    # What to do when something else is holding that much of the card.
+    # "cpu" runs anyway with the model kept off the GPU - slower, but it works
+    # alongside an image generator instead of queueing behind one, which is
+    # what waiting amounted to. "wait" is the old behaviour, bounded at two
+    # minutes; "ignore" goes ahead on the GPU regardless.
+    gpu_busy_action: str = GPU_BUSY_CPU
     # What is going on in the picture. Enough to generate from on its own, and a
     # steer for whatever else the run was given.
     situation: str = NO_SITUATION
@@ -357,6 +371,9 @@ class RunContext:
     """
 
     routed: RoutedPlan
+    # Whether this run keeps its models off the GPU. Decided once, before
+    # anything is asked of a model, and honoured by every client it makes.
+    cpu_only: bool
     instruction: str
     # What kind of moment this is, in words. Carried apart from the instruction
     # because the router writes its own scene description over that, and the
@@ -388,7 +405,17 @@ class RunContext:
             description_cache_hit=self.description_cache_hit,
             description_error=self.description_error,
         )
-        return f"{heading}\n\n{self.gpu_note}" if self.gpu_note else heading
+        return self.noted(heading)
+
+    def noted(self, status: str) -> str:
+        """A status with what happened about the card added to it.
+
+        The tag path builds its own heading rather than using `status()`, so it
+        never carried this - which meant the most-used action of the lot said
+        nothing about having waited two minutes for the card, and would have
+        said nothing about having gone to the CPU instead.
+        """
+        return f"{status}\n\n{self.gpu_note}" if self.gpu_note else status
 
 
 @dataclass(frozen=True)
@@ -413,6 +440,10 @@ class WebRunResult:
     # Kept apart from the status so the Web UI can carry it up from a follow-up
     # run, whose status otherwise just repeats the primary run's.
     panel_note: str = ""
+    # What happened about the GPU, on its own as well as inside the status: a
+    # sweep keeps only the prompts from each run, so a note buried in a status
+    # it throws away would never be seen.
+    gpu_note: str = ""
 
 
 class WebPromptService:
@@ -444,6 +475,39 @@ class WebPromptService:
         # Loading the dictionary is the only reason a tag review would need a
         # compiler, so it is read on its own and only when something asks.
         self._known_tags = known_tags
+
+    def _settle_the_card(
+        self, run_options: "RunOptions", on_progress: ProgressCallback | None
+    ) -> tuple[str, bool]:
+        """What to do about another program holding the GPU, and say so.
+
+        Waiting was the only answer and it was the wrong one: an image
+        generator can hold the card for an hour, and every run in that hour sat
+        through the full two-minute wait and then crawled anyway. Running on
+        the CPU is slower per run but it starts immediately and coexists.
+        """
+        limit_mib = int(run_options.gpu_wait_gb * 1024)
+        if limit_mib <= 0:
+            return "", False
+        if not gpu_is_busy(run_options.ollama_url, limit_mib=limit_mib):
+            return "", False
+        if run_options.gpu_busy_action == GPU_BUSY_IGNORE:
+            return "", False
+        if run_options.gpu_busy_action == GPU_BUSY_WAIT:
+            return (
+                wait_for_gpu(
+                    run_options.ollama_url,
+                    limit_mib=limit_mib,
+                    on_wait=lambda: _report_progress(on_progress, "gpu_wait", 0.03),
+                ),
+                False,
+            )
+        _report_progress(on_progress, "cpu_fallback", 0.03)
+        return (
+            "他タスクがGPUを使用中のため、CPUで実行しました。"
+            "GPUより遅くなりますが、待たずに動きます。",
+            True,
+        )
 
     def run(
         self,
@@ -496,17 +560,14 @@ class WebPromptService:
         # then hold for a further two minutes; without this the page sits blank
         # through the one stretch of a run that most looks like a hang.
         _report_progress(on_progress, "preparing", 0.02)
-        # A run that starts while something else holds the card does not fail,
-        # it crawls, so it is worth waiting a little before asking anything.
-        gpu_note = wait_for_gpu(
-            run_options.ollama_url,
-            limit_mib=int(run_options.gpu_wait_gb * 1024),
-            on_wait=lambda: _report_progress(on_progress, "gpu_wait", 0.03),
-        )
+        gpu_note, cpu_only = self._settle_the_card(run_options, on_progress)
         _report_progress(on_progress, "routing", 0.05)
         if run_options.action_override == "auto":
-            router = self.router_factory(
-                run_options.ollama_url, run_options.router_model
+            router = _kept_off_the_card(
+                self.router_factory(
+                    run_options.ollama_url, run_options.router_model
+                ),
+                cpu_only,
             )
             routed = router.route(route_request)
         else:
@@ -547,6 +608,7 @@ class WebPromptService:
                     run_options.image_path,
                     ollama_url=run_options.ollama_url,
                     vision_model=run_options.vision_model,
+                    cpu_only=cpu_only,
                 )
             except Exception as exc:
                 # The description is an aid, so a missing or broken vision model
@@ -555,6 +617,7 @@ class WebPromptService:
 
         context = RunContext(
             routed=routed,
+            cpu_only=cpu_only,
             instruction=clean_instruction,
             situation=situation_direction(situation),
             situation_prose=situation_direction(situation, with_tags=False),
@@ -644,6 +707,7 @@ class WebPromptService:
                     vision_model=vision_model,
                     text_model=scene_model or compiler_model,
                     chain=next_panel_chain,
+                    cpu_only=context.cpu_only,
                 )
             except Exception as exc:
                 panel_variants = None
@@ -659,7 +723,9 @@ class WebPromptService:
         if panel_variants is not None:
             output_variants = panel_variants
         else:
-            compiler = self.compiler_factory(ollama_url, compiler_model)
+            compiler = _kept_off_the_card(
+                self.compiler_factory(ollama_url, compiler_model), context.cpu_only
+            )
             compile_request = _build_compile_request(
                 routed.plan,
                 instruction=clean_instruction,
@@ -712,6 +778,7 @@ class WebPromptService:
             description_cache_hit=description_cache_hit,
             description_error=description_error,
         )
+        status = context.noted(status)
         prose_prompt = ""
         if output_variants:
             prose_prompt, prose_error = self._compose_prose(
@@ -724,6 +791,7 @@ class WebPromptService:
         if unknown_tags:
             status += f"\n\nUnknown tags: {', '.join(unknown_tags)}"
         result = WebRunResult(
+            gpu_note=context.gpu_note,
             action_plan=_plan_dict(routed),
             inferred_tags=inferred_text,
             output="\n\n".join(rendered_variants),
@@ -792,12 +860,14 @@ class WebPromptService:
             variants=options.variants,
             ollama_url=options.ollama_url,
             scene_model=options.scene_model or options.compiler_model,
+            cpu_only=context.cpu_only,
             situation_guidance=_subordinate(
                 context.situation_prose, context.instruction or context.base_prompt
             ),
             image_path=options.image_path if options.scene_sees_image else "",
         )
         result = WebRunResult(
+            gpu_note=context.gpu_note,
             action_plan=_plan_dict(context.routed),
             inferred_tags=context.inferred_text,
             output="\n\n".join(
@@ -834,11 +904,13 @@ class WebPromptService:
             protected=normalize_tags(parse_tag_text(context.edited_tags)),
             ollama_url=options.ollama_url,
             vision_model=options.vision_model,
+            cpu_only=context.cpu_only,
         )
         reviewed_text = ", ".join(review.tags)
         status = context.status()
         status += "\n\n" + _review_status(review, review_error, options.vision_model)
         result = WebRunResult(
+            gpu_note=context.gpu_note,
             action_plan=_plan_dict(context.routed),
             inferred_tags=reviewed_text,
             output=format_variant(review.tags, OutputFormat.grouped),
@@ -870,6 +942,7 @@ class WebPromptService:
         if prose_error:
             status += f"\n\n{prose_error}"
         result = WebRunResult(
+            gpu_note=context.gpu_note,
             action_plan=_plan_dict(context.routed),
             inferred_tags=context.inferred_text,
             output=format_variant(context.inferred_names, OutputFormat.grouped),
@@ -900,6 +973,7 @@ class WebPromptService:
         scene_model: str,
         situation_guidance: str = "",
         image_path: str = "",
+        cpu_only: bool = False,
     ) -> list[str]:
         # A situation counts as material. The control says a situation alone is
         # enough to generate from, and it has to be true here too or the button
@@ -928,7 +1002,9 @@ class WebPromptService:
             situation_guidance=situation_guidance,
             sees_image=bool(image_path),
         )
-        client = self.text_factory(ollama_url, scene_model)
+        client = _kept_off_the_card(
+            self.text_factory(ollama_url, scene_model), cpu_only
+        )
         response = client.generate(
             LLMRequest(
                 prompt=request,
@@ -962,6 +1038,7 @@ class WebPromptService:
         vision_model: str,
         text_model: str,
         chain: bool = False,
+        cpu_only: bool = False,
     ) -> tuple[list[list[str]], str]:
         """Panels after this one, and what to say about them.
 
@@ -986,6 +1063,7 @@ class WebPromptService:
                 ollama_url=ollama_url,
                 vision_model=vision_model,
                 text_model=text_model,
+                cpu_only=cpu_only,
             )
         profile = next_panel_profile(change, moment)
         protected = protected_tags(tags, profile.preserve)
@@ -998,10 +1076,11 @@ class WebPromptService:
             protected=protected,
             sees_image=bool(image_path),
         )
-        client = (
+        client = _kept_off_the_card(
             self.vision_factory(ollama_url, vision_model)
             if image_path
-            else self.text_factory(ollama_url, text_model)
+            else self.text_factory(ollama_url, text_model),
+            cpu_only,
         )
         # Three boxes holding the same panel are worth one box. The time slider
         # says how far ahead to look, not how alike the answers should be, so
@@ -1070,6 +1149,7 @@ class WebPromptService:
         ollama_url: str,
         vision_model: str,
         text_model: str,
+        cpu_only: bool = False,
     ) -> tuple[list[list[str]], str]:
         """A sequence, each panel asked for from the one before it."""
         panels: list[list[str]] = []
@@ -1093,6 +1173,7 @@ class WebPromptService:
                 # Falling back to the prose model would quietly hand the rest of
                 # the sequence to a smaller one that invents tags.
                 text_model=vision_model if image_path else text_model,
+                cpu_only=cpu_only,
             )
             current = step_panels[0]
             panels.append(current)
@@ -1116,11 +1197,14 @@ class WebPromptService:
         protected: list[str],
         ollama_url: str,
         vision_model: str,
+        cpu_only: bool = False,
     ) -> tuple[TagReview, str]:
         """The reviewed list, or the original one and the reason it stayed."""
         unreviewed = TagReview(tags=list(tags))
         try:
-            client = self.vision_factory(ollama_url, vision_model)
+            client = _kept_off_the_card(
+                self.vision_factory(ollama_url, vision_model), cpu_only
+            )
             response = client.generate(
                 LLMRequest(
                     prompt=build_tag_review_request(tags, description=image_description),
@@ -1154,6 +1238,7 @@ class WebPromptService:
         *,
         ollama_url: str,
         vision_model: str,
+        cpu_only: bool = False,
     ) -> tuple[str, bool]:
         """Describe the image in natural language, reusing the cached description.
 
@@ -1166,7 +1251,9 @@ class WebPromptService:
             self._description_cache.move_to_end(cache_key)
             return cached, True
 
-        vision_client = self.vision_factory(ollama_url, vision_model)
+        vision_client = _kept_off_the_card(
+            self.vision_factory(ollama_url, vision_model), cpu_only
+        )
         response = vision_client.generate(
             LLMRequest(
                 prompt=IMAGE_DESCRIPTION_PROMPT,
@@ -1216,6 +1303,21 @@ class WebPromptService:
             while len(self._image_cache) > self.image_cache_size:
                 self._image_cache.popitem(last=False)
         return result, False
+
+
+def _kept_off_the_card(made, cpu_only: bool):
+    """Switch whatever a factory returned to CPU, where that is possible.
+
+    The factories are given as `(url, model) -> client`, so the decision cannot
+    travel through their arguments without changing every caller's signature -
+    and a fake in a test has no card to keep off in the first place.
+    """
+    if not cpu_only:
+        return made
+    for candidate in (made, getattr(made, "llm_client", None)):
+        if isinstance(candidate, OllamaClient):
+            candidate.cpu_only = True
+    return made
 
 
 def _default_router_factory(ollama_url: str, model: str) -> NaturalLanguageRouter:

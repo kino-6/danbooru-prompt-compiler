@@ -34,6 +34,8 @@ from .tag_filter import (
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
     DEFAULT_GPU_WAIT_GB,
+    GPU_BUSY_CHOICES,
+    GPU_BUSY_CPU,
     DEFAULT_NEXT_PANEL_CHANGE,
     DEFAULT_NEXT_PANEL_TIME,
     DEFAULT_OLLAMA_URL,
@@ -145,6 +147,7 @@ def task_field_visibility(task: str) -> list[bool]:
 PROGRESS_LABELS = {
     "preparing": "準備しています",
     "gpu_wait": "他タスクのGPU使用が収まるのを待っています",
+    "cpu_fallback": "GPUが塞がっているためCPUで実行します",
     "routing": "指示を解釈しています",
     "tagging": "画像タグを推測しています",
     "vision": "VLMで構図を確認しています",
@@ -547,6 +550,10 @@ class SituationRun:
     prompt: str = ""
     avoid: str = ""
     error: str = ""
+    # What happened about the GPU. A sweep keeps only the prompts, so without
+    # this a run that quietly went to the CPU - and took four times as long
+    # because of it - would never say why.
+    gpu_note: str = ""
 
 
 def run_situation_sweep(
@@ -628,7 +635,13 @@ def run_situation_sweep(
         if not prompt:
             prompt = result.candidates[0] if result.candidates else ""
         runs.append(
-            SituationRun(name, label, prompt=prompt, avoid=result.prose_avoid or "")
+            SituationRun(
+                name,
+                label,
+                prompt=prompt,
+                avoid=result.prose_avoid or "",
+                gpu_note=result.gpu_note,
+            )
         )
     return runs
 
@@ -788,6 +801,12 @@ def _situation_summary(gr, runs: list[SituationRun]):
     summary = f"{len(runs) - len(failed)}件を生成しました。"
     if failed:
         summary += "失敗: " + "、".join(failed)
+    # Said once for the sweep rather than once per run: it is the same card and
+    # the same decision every time, and a run that took four times as long
+    # because it stayed off the GPU should say so.
+    note = next((run.gpu_note for run in runs if run.gpu_note), "")
+    if note:
+        summary += f"\n\n{note}"
     return [gr.update(value=avoid, visible=bool(avoid)), summary]
 
 
@@ -1139,6 +1158,7 @@ def build_app(*, service: WebPromptService | None = None):
                 compiler_model,
                 scene_model,
                 gpu_wait_gb,
+                gpu_busy_action,
                 apply_tag_exclusions,
                 excluded_tags,
             ) = settings_values
@@ -1154,6 +1174,7 @@ def build_app(*, service: WebPromptService | None = None):
                     "scene_model": scene_model or compiler_model,
                     "scene_template": template,
                     "gpu_wait_gb": gpu_wait_gb,
+                    "gpu_busy_action": gpu_busy_action,
                     "apply_tag_exclusions": apply_tag_exclusions,
                     "excluded_tags": excluded_tags,
                 },
@@ -1230,6 +1251,7 @@ def build_app(*, service: WebPromptService | None = None):
             settings.compiler_model,
             settings.scene_model,
             settings.gpu_wait_gb,
+            settings.gpu_busy_action,
             settings.apply_tag_exclusions,
             settings.excluded_tags,
         ]
@@ -1336,6 +1358,7 @@ def _run_inputs(*, task, image, controls, settings, results) -> list:
         "vision_model": settings.vision_model,
         "allow_private_image_urls": settings.allow_private_image_urls,
         "gpu_wait_gb": settings.gpu_wait_gb,
+        "gpu_busy_action": settings.gpu_busy_action,
         "apply_tag_exclusions": settings.apply_tag_exclusions,
         "excluded_tags": settings.excluded_tags,
     }
@@ -1591,9 +1614,20 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
             12.0,
             value=remembered(stored, "gpu_wait_gb", DEFAULT_GPU_WAIT_GB),
             step=0.5,
-            label="他タスクのGPU使用で待つ閾値（GB）",
+            label="他タスクのGPU使用とみなす閾値（GB）",
             elem_id="gpu-wait-input",
-            info="他のプログラムがこれ以上VRAMを使っていたら、空くまで少し待ちます。0で無効。",
+            info="他のプログラムがこれ以上VRAMを使っていたら、下の対応を取ります。0で無効。",
+        )
+        # Waiting was the only answer and it was the wrong one: an image
+        # generator can hold the card for an hour, and every run in that hour
+        # sat through the full two-minute wait and then crawled anyway.
+        gpu_busy_action = gr.Radio(
+            choices=list(GPU_BUSY_CHOICES),
+            value=remembered(stored, "gpu_busy_action", GPU_BUSY_CPU),
+            label="他タスクがGPUを使っているとき",
+            elem_id="gpu-busy-action",
+            info="「CPUで実行」はGPUを一切使わずに生成します。"
+            "遅くなりますが、画像生成などと同時に動かせます。",
         )
         allow_private_image_urls = gr.Checkbox(
             value=remembered(stored, "allow_private_image_urls", False),
@@ -1673,6 +1707,7 @@ def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
         scene_settings_box=scene_settings_box,
         allow_private_image_urls=allow_private_image_urls,
         gpu_wait_gb=gpu_wait_gb,
+        gpu_busy_action=gpu_busy_action,
         url_input=url_input,
         url_button=url_button,
         diagnostic_button=diagnostic_button,

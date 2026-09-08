@@ -23,6 +23,7 @@ class OllamaClient(LLMClient):
         json_mode: bool = False,
         json_schema: dict[str, object] | None = None,
         think: bool | str | None = None,
+        cpu_only: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -31,6 +32,12 @@ class OllamaClient(LLMClient):
         self.json_mode = json_mode
         self.json_schema = json_schema
         self.think = think
+        # Keeps the whole model off the card. Ollama reads `num_gpu` as the
+        # number of layers to offload, so zero is CPU-only - slower, but it
+        # runs alongside whatever else is using the GPU instead of queueing
+        # behind it. Set per client rather than per request: a run decides
+        # once, and every call it makes should honour that decision.
+        self.cpu_only = cpu_only
 
     def generate(self, request: LLMRequest) -> LLMResponse:
         outputs: list[str] = []
@@ -50,8 +57,13 @@ class OllamaClient(LLMClient):
                     if request.temperature is not None
                     else self.temperature
                 )
+                options: dict[str, object] = {}
                 if temperature is not None:
-                    payload["options"] = {"temperature": temperature}
+                    options["temperature"] = temperature
+                if self.cpu_only:
+                    options["num_gpu"] = 0
+                if options:
+                    payload["options"] = options
                 if self.json_schema is not None:
                     payload["format"] = self.json_schema
                 elif self.json_mode:

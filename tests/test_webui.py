@@ -1397,3 +1397,27 @@ def test_the_situation_status_sits_with_the_buttons_that_drive_it() -> None:
     assert _layout_parent(layout, ids["situation-status"]) != _layout_parent(
         layout, ids["situation-merged"]
     )
+
+
+def test_a_sweep_that_ran_on_the_cpu_says_so_once() -> None:
+    """A sweep keeps only the prompts, so a note in a status it throws away
+    would never be seen - and a run four times slower for staying off the card
+    needs to say why."""
+    runs = [
+        webui.SituationRun("battle", "戦闘", "holding_weapon", gpu_note="CPUで実行しました。"),
+        webui.SituationRun("rest", "休息", "sitting", gpu_note="CPUで実行しました。"),
+    ]
+
+    _avoid, summary = webui._situation_summary(gradio, runs)
+
+    # Once for the sweep, not once per run: same card, same decision.
+    assert summary.count("CPUで実行しました。") == 1
+    assert "2件を生成しました。" in summary
+
+
+def test_a_sweep_on_a_free_card_says_nothing_about_it() -> None:
+    runs = [webui.SituationRun("battle", "戦闘", "holding_weapon")]
+
+    _avoid, summary = webui._situation_summary(gradio, runs)
+
+    assert summary.strip() == "1件を生成しました。"

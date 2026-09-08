@@ -40,6 +40,7 @@ REMEMBERED_FIELDS: tuple[str, ...] = (
     "allow_private_image_urls",
     "apply_tag_exclusions",
     "gpu_wait_gb",
+    "gpu_busy_action",
 )
 
 

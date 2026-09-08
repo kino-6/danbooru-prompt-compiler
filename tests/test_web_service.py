@@ -1,7 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from danbooru_prompt_compiler import web_service
+from danbooru_prompt_compiler.llm import OllamaClient
 from danbooru_prompt_compiler.image_tagger import (
     CHARACTER_CATEGORY,
     GENERAL_CATEGORY,
@@ -1423,3 +1426,106 @@ def test_a_prose_prompt_keeps_the_subject_above_the_situation() -> None:
     request = client.last_request.prompt
     assert "弓を持ったエルフ" in request
     assert request.index("弓を持ったエルフ") < request.index("Mid-fight")
+
+
+class _CardWatch:
+    """Stands in for the card, so a test never has to have one."""
+
+    def __init__(self, busy: bool) -> None:
+        self.busy = busy
+        self.waited = False
+
+    def is_busy(self, *_args, **_kwargs) -> bool:
+        return self.busy
+
+    def wait(self, *_args, **_kwargs) -> str:
+        self.waited = True
+        return "待ちました。"
+
+
+def _cpu_service(compiler) -> WebPromptService:
+    return WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.compile, variants=1)
+        ),
+        compiler_factory=lambda _url, _model: compiler,
+    )
+
+
+def test_a_busy_card_sends_the_run_to_the_cpu_instead_of_queueing_behind_it(
+    monkeypatch,
+) -> None:
+    """Waiting was the only answer and it was the wrong one.
+
+    An image generator can hold the card for an hour, and every run in that
+    hour sat through the full two-minute wait and then crawled anyway.
+    """
+    watch = _CardWatch(busy=True)
+    monkeypatch.setattr(web_service, "gpu_is_busy", watch.is_busy)
+    monkeypatch.setattr(web_service, "wait_for_gpu", watch.wait)
+    service = _cpu_service(FakeCompiler())
+
+    result = service.run(
+        image_path=None,
+        instruction="エルフ",
+        gpu_wait_gb=4.0,
+        gpu_busy_action=web_service.GPU_BUSY_CPU,
+    )
+
+    assert watch.waited is False
+    # The note reaches the page through the run status.
+    assert "CPUで実行" in result.status
+
+
+def test_the_old_waiting_behaviour_is_still_there_for_anyone_who_wants_it(
+    monkeypatch,
+) -> None:
+    watch = _CardWatch(busy=True)
+    monkeypatch.setattr(web_service, "gpu_is_busy", watch.is_busy)
+    monkeypatch.setattr(web_service, "wait_for_gpu", watch.wait)
+    service = _cpu_service(FakeCompiler())
+
+    service.run(
+        image_path=None,
+        instruction="エルフ",
+        gpu_wait_gb=4.0,
+        gpu_busy_action=web_service.GPU_BUSY_WAIT,
+    )
+
+    assert watch.waited is True
+
+
+def test_a_free_card_costs_neither_a_wait_nor_the_cpu(monkeypatch) -> None:
+    watch = _CardWatch(busy=False)
+    monkeypatch.setattr(web_service, "gpu_is_busy", watch.is_busy)
+    monkeypatch.setattr(web_service, "wait_for_gpu", watch.wait)
+    service = _cpu_service(FakeCompiler())
+
+    result = service.run(
+        image_path=None, instruction="エルフ", gpu_wait_gb=4.0
+    )
+
+    assert watch.waited is False
+    assert "CPUで実行" not in result.status
+    assert "待ちました" not in result.status
+
+
+def test_the_cpu_decision_reaches_the_client_the_factory_made() -> None:
+    """The factories are (url, model) -> client, so it cannot go through them."""
+    client = OllamaClient(model="qwen3:1.7b")
+
+    web_service._kept_off_the_card(client, True)
+    assert client.cpu_only is True
+
+    holder = SimpleNamespace(llm_client=OllamaClient(model="qwen3:1.7b"))
+    web_service._kept_off_the_card(holder, True)
+    assert holder.llm_client.cpu_only is True
+
+
+def test_nothing_is_switched_when_the_card_was_never_busy() -> None:
+    client = OllamaClient(model="qwen3:1.7b")
+
+    web_service._kept_off_the_card(client, False)
+
+    assert client.cpu_only is False

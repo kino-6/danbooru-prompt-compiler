@@ -1,3 +1,5 @@
+from unittest import mock
+
 from danbooru_prompt_compiler.llm import OllamaClient
 from danbooru_prompt_compiler.models import LLMRequest
 
@@ -53,3 +55,65 @@ def test_ollama_client_uses_configured_timeout(monkeypatch, tmp_path) -> None:
     assert FakeHTTPClient.seen_json["format"] == schema
     assert FakeHTTPClient.seen_json["think"] is False
     assert FakeHTTPClient.seen_json["images"] == ["aW1hZ2UgYnl0ZXM="]
+
+
+def test_a_cpu_only_client_asks_ollama_to_keep_the_model_off_the_card() -> None:
+    """Ollama reads num_gpu as layers to offload, so zero is CPU-only.
+
+    Slower than the GPU, but it runs alongside an image generator instead of
+    queueing behind one.
+    """
+    sent: list[dict] = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": "ok"}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def post(self, _url, json):
+            sent.append(json)
+            return _Response()
+
+    client = OllamaClient(model="qwen3:1.7b", cpu_only=True, temperature=0.4)
+    with mock.patch("httpx.Client", lambda **_kwargs: _Client()):
+        client.generate(LLMRequest(prompt="hello", variants=1))
+
+    assert sent[0]["options"]["num_gpu"] == 0
+    # And it does not lose the setting it shares the options block with.
+    assert sent[0]["options"]["temperature"] == 0.4
+
+
+def test_a_normal_client_says_nothing_about_the_gpu() -> None:
+    sent: list[dict] = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": "ok"}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def post(self, _url, json):
+            sent.append(json)
+            return _Response()
+
+    with mock.patch("httpx.Client", lambda **_kwargs: _Client()):
+        OllamaClient(model="qwen3:1.7b").generate(LLMRequest(prompt="hi", variants=1))
+
+    assert "options" not in sent[0]

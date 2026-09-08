@@ -201,9 +201,13 @@ The direction itself is kept out of the answer. Asked for a resting elf, the pro
 
 Under the prompt boxes, the same groups the output is already organized into appear as separate copyable boxes - 人物, 外見, 服装, ポーズ, 情景, 画風, 構図, その他 - so a prompt can be reused piecewise: the character without the scene, the clothing without the pose. They are read back from prompt box 1 rather than kept from the run, so editing that box or adopting a candidate re-splits what you can see, and a group with nothing in it does not appear.
 
-`他タスクのGPU使用で待つ閾値（GB）` holds a run back while another program is on the card. A run that starts into a busy GPU does not fail - Ollama pushes layers onto the CPU and the run crawls - so a short wait is worth more than a slow answer.
+`他タスクのGPU使用とみなす閾値（GB）` and `他タスクがGPUを使っているとき` decide what happens when another program is on the card. A run that starts into a busy GPU does not fail - Ollama pushes layers onto the CPU and the run crawls - so it is worth doing something about.
 
-The obvious measure does not work: per-process VRAM reads `[N/A]` under Windows WDDM, and the total includes whatever Ollama is holding for us, so waiting on it would be waiting on ourselves. Ollama reports what it holds, and the total minus that is what everyone else holds. A model already resident skips the wait entirely, since nothing is going to be loaded and the warm runs are the fast ones. The wait is bounded at two minutes and the run always goes ahead, with what happened in the status line. Set it to 0 to switch it off, and it is off for library callers, who should not pay for a subprocess on every run.
+Waiting used to be the only answer and it was the wrong one. An image generator holds the card for as long as you are using it, so every run for that whole time sat through the full two-minute wait and then crawled anyway; the two do not take turns, and waiting amounted to queueing behind a program that was not going to finish. The default is now `CPUで実行`: the run goes ahead with `num_gpu: 0`, which keeps the model entirely off the card - measured at `size_vram=0` for a 26B model - so it coexists with whatever is generating images. It is slower per run, and it starts immediately: the same two-situation sweep took 133 seconds when it waited and 25 when it did not. `空くまで待つ` is the old behaviour, still bounded at two minutes, and `気にせずGPUで実行` skips the check.
+
+The decision is made once per run, before anything is asked of a model, and every client that run creates honours it - the router, the tag compiler, the prose model and the vision model alike. The tagger never needed it: WD tagger runs on `CPUExecutionProvider` already. What happened is said in the status line, and once for a whole sweep rather than once per situation.
+
+The obvious measure does not work: per-process VRAM reads `[N/A]` under Windows WDDM, and the total includes whatever Ollama is holding for us, so waiting on it would be waiting on ourselves. Ollama reports what it holds, and the total minus that is what everyone else holds. A model already resident counts as not busy at all, since nothing is going to be loaded and the warm runs are the fast ones. Whatever is decided, the run always goes ahead. Set it to 0 to switch it off, and it is off for library callers, who should not pay for a subprocess on every run.
 
 The workbench remembers how it was last left. Which models, where Ollama is, the thresholds, the output count, the sliders and the selected task are saved to `data/webui_settings.json` on every run and read back at launch. The work itself is never saved: an image, an instruction or a half-edited prompt belongs to the session that made it, and finding yesterday's instruction waiting in the box is worse than finding it empty. The file is gitignored, and a missing or hand-mangled one costs a control its memory rather than the page.
 
@@ -517,7 +521,7 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 - `tag_filter.py`: exclusion-word rules, matching, and persistence.
 - `scene_prompt.py`: natural-language prompt templates, request building, and rendering.
 - `next_panel.py`: the moment after the current panel, bounded by the dictionary.
-- `gpu_watch.py`: whether another program is on the card, and how long to wait for it.
+- `gpu_watch.py`: whether another program is on the card, and how long to wait if waiting is what was asked for.
 - `settings_store.py`: the Web UI settings that survive a restart, and the work that does not.
 - `situation.py`: what kind of moment the picture is, as a direction rather than a scene.
 - `tag_review.py`: dictionary-bounded review of inferred tags against the image.

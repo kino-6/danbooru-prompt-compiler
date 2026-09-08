@@ -83,6 +83,25 @@ def foreign_vram_mib(base_url: str, *, client: httpx.Client | None = None) -> in
     return max(used - ours, 0)
 
 
+def gpu_is_busy(
+    base_url: str,
+    *,
+    limit_mib: int = DEFAULT_FOREIGN_LIMIT_MIB,
+    client: httpx.Client | None = None,
+) -> bool:
+    """Whether something other than Ollama is holding enough of the card to matter.
+
+    A model already resident is not busy: it is not going to be loaded again,
+    so nothing is waiting on anything and the run should just go.
+    """
+    if limit_mib <= 0:
+        return False
+    if ollama_vram_mib(base_url, client=client) > 0:
+        return False
+    foreign = foreign_vram_mib(base_url, client=client)
+    return foreign is not None and foreign > limit_mib
+
+
 def wait_for_gpu(
     base_url: str,
     *,
