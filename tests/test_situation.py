@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import textwrap
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from danbooru_prompt_compiler.situation import (
     find_situation,
     group_situations,
     load_situations,
+    sampled_tags,
     situation_choices,
     situation_direction,
 )
@@ -153,3 +155,51 @@ def test_categories_come_out_in_the_order_their_members_ask_for() -> None:
     )
     # Every situation lands in exactly one group.
     assert sum(len(members) for _category, members in grouped) == len(situations)
+
+
+BIG = Situation(
+    name="battle",
+    label="戦闘",
+    guidance="Mid-fight.",
+    tags=["a", "b", "c", "d", "e", "f", "g", "h"],
+)
+
+
+def test_only_some_of_the_candidates_are_offered_on_any_one_run() -> None:
+    """The whole pool handed over came back verbatim, every run.
+
+    Five plausible tags read as an answer, and copying an answer is the easiest
+    thing a model can do - so the same nine words arrived in the same order
+    however many times the same situation was asked for.
+    """
+    drawn = sampled_tags(BIG, 3, rng=random.Random(0))
+
+    assert len(drawn) == 3
+    assert set(drawn) <= set(BIG.tags)
+
+
+def test_the_draw_keeps_the_order_the_file_lists_them_in() -> None:
+    drawn = sampled_tags(BIG, 4, rng=random.Random(5))
+
+    # Which ones were drawn is the variation. Shuffling on top of that only
+    # makes two identical draws look different.
+    assert drawn == [tag for tag in BIG.tags if tag in drawn]
+
+
+def test_asking_for_all_of_them_or_none_gives_the_whole_pool() -> None:
+    assert sampled_tags(BIG, 0) == BIG.tags
+    assert sampled_tags(BIG, len(BIG.tags)) == BIG.tags
+    assert sampled_tags(BIG, 99) == BIG.tags
+
+
+def test_a_direction_that_samples_offers_fewer_than_the_pool_holds() -> None:
+    direction = situation_direction(BIG, sample=3)
+
+    listed = direction.split("参考タグ")[1]
+    assert sum(tag in listed for tag in BIG.tags) == 3
+
+
+def test_every_situation_has_enough_candidates_to_draw_from() -> None:
+    """Sampling five of five is not sampling; it is the old fixed list."""
+    for situation in load_situations():
+        assert len(situation.tags) >= 8, f"{situation.name} has {len(situation.tags)}"

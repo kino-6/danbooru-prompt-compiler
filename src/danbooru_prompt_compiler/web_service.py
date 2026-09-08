@@ -46,6 +46,7 @@ from .scene_prompt import (
 )
 from .situation import (
     NO_SITUATION,
+    SITUATION_TAG_SAMPLE,
     Situation,
     find_situation,
     load_situations,
@@ -109,6 +110,10 @@ DEFAULT_NEXT_PANEL_CHANGE = 0.5
 # action reaches its next stage.
 DEFAULT_NEXT_PANEL_TIME = 0.5
 SCENE_PROMPT_TEMPERATURE = 0.6
+# Tag generation from a description. Zero made every run of the same
+# situation identical, which is the whole of why a second one felt
+# pointless; the dictionary bounds what the extra room can reach.
+NEW_PROMPT_TEMPERATURE = 0.8
 # The floor for asking a deterministic band for more than one panel at once.
 MULTI_PANEL_TEMPERATURE = 0.5
 DEFAULT_GPU_WAIT_GB = DEFAULT_FOREIGN_LIMIT_MIB / 1024
@@ -619,7 +624,12 @@ class WebPromptService:
             routed=routed,
             cpu_only=cpu_only,
             instruction=clean_instruction,
-            situation=situation_direction(situation),
+            # Drawn fresh each run rather than handed over whole: the full pool
+            # came back verbatim every time, the same words in the same order,
+            # which is what made a second look at the same situation pointless.
+            situation=situation_direction(
+                situation, sample=SITUATION_TAG_SAMPLE
+            ),
             situation_prose=situation_direction(situation, with_tags=False),
             base_prompt=clean_base_prompt,
             edited_tags=clean_edited_tags,
@@ -1528,6 +1538,13 @@ def _build_compile_request(
             variants=plan.variants,
             input_type=InputType.scene,
             excluded_tags=exclusion_rules,
+            # Making a prompt from a description is the creative end of this,
+            # and at the client's default of zero it was not creative at all:
+            # the same description came back as the same tags every time, so a
+            # second look at a situation was worth nothing. The dictionary
+            # still decides what may be written, so the room this buys is room
+            # among real tags.
+            temperature=NEW_PROMPT_TEMPERATURE,
         )
 
     source_tags = base_prompt or ", ".join(inferred_tags)

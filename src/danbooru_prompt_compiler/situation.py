@@ -14,6 +14,7 @@ compiler may use, and the dictionary has the final say as everywhere else.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -94,8 +95,19 @@ def group_situations(situations: list[Situation]) -> list[tuple[str, list[Situat
     )
 
 
+# How many of a situation's candidate tags one run gets to see. The whole pool
+# handed over at once came back verbatim every time - the same nine words in
+# the same order, run after run - because a list of five plausible tags is an
+# answer, and copying it is the easiest thing a model can do.
+SITUATION_TAG_SAMPLE = 5
+
+
 def situation_direction(
-    situation: Situation | None, *, with_tags: bool = True
+    situation: Situation | None,
+    *,
+    with_tags: bool = True,
+    sample: int = 0,
+    rng: random.Random | None = None,
 ) -> str:
     """The words a situation adds to whatever the run was already asked to do.
 
@@ -127,9 +139,26 @@ def situation_direction(
         # are true, and the dictionary decides whether they may be written.
         lines.append(
             "参考タグ（当てはまるものだけ使い、無理に全部入れない）: "
-            + ", ".join(situation.tags)
+            + ", ".join(sampled_tags(situation, sample, rng=rng))
         )
     return "\n".join(lines)
+
+
+def sampled_tags(
+    situation: Situation, sample: int, *, rng: random.Random | None = None
+) -> list[str]:
+    """Some of the situation's candidates, in the order the file lists them.
+
+    Zero, or more than there are, means all of them - which is what a caller
+    that wants the pool itself asks for. Kept in file order rather than
+    shuffled: which ones were drawn is the variation, and reordering them on
+    top of that only makes two identical answers look different.
+    """
+    if sample <= 0 or sample >= len(situation.tags):
+        return list(situation.tags)
+    chooser = rng or random
+    drawn = set(chooser.sample(situation.tags, sample))
+    return [tag for tag in situation.tags if tag in drawn]
 
 
 def _read_situation(path: Path) -> Situation | None:

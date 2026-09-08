@@ -1529,3 +1529,49 @@ def test_nothing_is_switched_when_the_card_was_never_busy() -> None:
     web_service._kept_off_the_card(client, False)
 
     assert client.cpu_only is False
+
+
+def test_making_a_prompt_from_a_description_is_not_asked_for_deterministically() -> None:
+    """At the client's default of zero, the same situation gave the same tags.
+
+    Measured: five runs of 戦闘 on one subject produced one distinct answer,
+    and every tag in it was fixed. A second look at a situation was worth
+    nothing, which is what made the whole thing tiring after a few goes.
+    """
+    request = web_service._build_compile_request(
+        ActionPlan(action=WebAction.compile, scene_description="エルフ", variants=1),
+        instruction="エルフ",
+        base_prompt="",
+        inferred_tags=[],
+    )
+
+    assert request.temperature == web_service.NEW_PROMPT_TEMPERATURE
+    assert request.temperature > 0
+
+
+def test_a_run_offers_the_compiler_only_some_of_the_situation_s_tags() -> None:
+    compiler = FakeCompiler()
+    service = WebPromptService(
+        tagger=FakeTagger(),
+        router_factory=lambda _url, _model: FixedRouter(
+            ActionPlan(action=WebAction.compile, variants=1)
+        ),
+        compiler_factory=lambda _url, _model: compiler,
+        situations=[
+            Situation(
+                name="battle",
+                label="戦闘",
+                guidance="Mid-fight.",
+                tags=[f"tag{n}" for n in range(12)],
+            )
+        ],
+    )
+
+    service.run(image_path=None, instruction="エルフ", situation="battle")
+
+    offered = [
+        tag
+        for tag in (f"tag{n}" for n in range(12))
+        if tag in compiler.last_request.situation_guidance
+    ]
+    assert 0 < len(offered) < 12
