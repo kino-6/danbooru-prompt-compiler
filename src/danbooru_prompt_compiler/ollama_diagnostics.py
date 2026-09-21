@@ -67,7 +67,7 @@ def check_ollama(
             message=message,
             resident_bytes=resident_bytes,
         )
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+    except (httpx.ConnectError, httpx.TimeoutException):
         return OllamaDiagnostic(
             reachable=False,
             installed_models=[],

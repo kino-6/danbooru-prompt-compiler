@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1575,3 +1576,20 @@ def test_a_run_offers_the_compiler_only_some_of_the_situation_s_tags() -> None:
         if tag in compiler.last_request.situation_guidance
     ]
     assert 0 < len(offered) < 12
+
+
+def test_every_client_a_run_makes_goes_through_the_one_place_that_honours_the_gpu() -> None:
+    """The CPU decision was threaded to six call sites by hand.
+
+    A seventh added later would have made its client straight from the factory
+    and run on the card the run had decided to stay off. Calling a factory
+    anywhere but `_make` is how that happens, so it is not allowed.
+    """
+    source = Path(web_service.__file__).read_text(encoding="utf-8")
+    direct = [
+        line.strip()
+        for line in source.splitlines()
+        if re.search(r"self\.(router|compiler|text|vision)_factory\(", line)
+    ]
+
+    assert direct == []

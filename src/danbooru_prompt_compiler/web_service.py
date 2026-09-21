@@ -481,6 +481,15 @@ class WebPromptService:
         # compiler, so it is read on its own and only when something asks.
         self._known_tags = known_tags
 
+    def _make(self, factory, ollama_url: str, model: str, *, cpu_only: bool):
+        """A client from one of the factories, honouring the run's GPU decision.
+
+        Every model a run touches is made here, so the decision cannot be
+        honoured by the clients that exist today and quietly skipped by the next
+        one somebody adds.
+        """
+        return _kept_off_the_card(factory(ollama_url, model), cpu_only)
+
     def _settle_the_card(
         self, run_options: "RunOptions", on_progress: ProgressCallback | None
     ) -> tuple[str, bool]:
@@ -568,11 +577,11 @@ class WebPromptService:
         gpu_note, cpu_only = self._settle_the_card(run_options, on_progress)
         _report_progress(on_progress, "routing", 0.05)
         if run_options.action_override == "auto":
-            router = _kept_off_the_card(
-                self.router_factory(
-                    run_options.ollama_url, run_options.router_model
-                ),
-                cpu_only,
+            router = self._make(
+                self.router_factory,
+                run_options.ollama_url,
+                run_options.router_model,
+                cpu_only=cpu_only,
             )
             routed = router.route(route_request)
         else:
@@ -676,15 +685,11 @@ class WebPromptService:
         ollama_url = options.ollama_url
         compiler_model = options.compiler_model
         scene_model = options.scene_model
-        scene_template = options.scene_template
-        scene_sees_image = options.scene_sees_image
         variants = options.variants
         next_panel_change = options.next_panel_change
         next_panel_time = options.next_panel_time
         next_panel_chain = options.next_panel_chain
         vision_model = options.vision_model
-        also_prose = options.also_prose
-
 
         # A new prompt is built from the instruction alone, so an image
         # description would contradict what the user asked for.
@@ -733,8 +738,11 @@ class WebPromptService:
         if panel_variants is not None:
             output_variants = panel_variants
         else:
-            compiler = _kept_off_the_card(
-                self.compiler_factory(ollama_url, compiler_model), context.cpu_only
+            compiler = self._make(
+                self.compiler_factory,
+                ollama_url,
+                compiler_model,
+                cpu_only=context.cpu_only,
             )
             compile_request = _build_compile_request(
                 routed.plan,
@@ -1012,8 +1020,8 @@ class WebPromptService:
             situation_guidance=situation_guidance,
             sees_image=bool(image_path),
         )
-        client = _kept_off_the_card(
-            self.text_factory(ollama_url, scene_model), cpu_only
+        client = self._make(
+            self.text_factory, ollama_url, scene_model, cpu_only=cpu_only
         )
         response = client.generate(
             LLMRequest(
@@ -1086,11 +1094,14 @@ class WebPromptService:
             protected=protected,
             sees_image=bool(image_path),
         )
-        client = _kept_off_the_card(
-            self.vision_factory(ollama_url, vision_model)
+        client = (
+            self._make(
+                self.vision_factory, ollama_url, vision_model, cpu_only=cpu_only
+            )
             if image_path
-            else self.text_factory(ollama_url, text_model),
-            cpu_only,
+            else self._make(
+                self.text_factory, ollama_url, text_model, cpu_only=cpu_only
+            )
         )
         # Three boxes holding the same panel are worth one box. The time slider
         # says how far ahead to look, not how alike the answers should be, so
@@ -1212,8 +1223,8 @@ class WebPromptService:
         """The reviewed list, or the original one and the reason it stayed."""
         unreviewed = TagReview(tags=list(tags))
         try:
-            client = _kept_off_the_card(
-                self.vision_factory(ollama_url, vision_model), cpu_only
+            client = self._make(
+                self.vision_factory, ollama_url, vision_model, cpu_only=cpu_only
             )
             response = client.generate(
                 LLMRequest(
@@ -1261,8 +1272,8 @@ class WebPromptService:
             self._description_cache.move_to_end(cache_key)
             return cached, True
 
-        vision_client = _kept_off_the_card(
-            self.vision_factory(ollama_url, vision_model), cpu_only
+        vision_client = self._make(
+            self.vision_factory, ollama_url, vision_model, cpu_only=cpu_only
         )
         response = vision_client.generate(
             LLMRequest(
