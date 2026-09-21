@@ -6,9 +6,29 @@ from types import SimpleNamespace
 
 import typer
 
+from .formatter import group_tags
 from .image_source import load_image_url_preview, resolve_image_source
+from .normalizer import normalize_tags, parse_tag_text
 from .ollama_diagnostics import check_ollama, format_ollama_error, restart_ollama_model
 from .scene_prompt import load_templates
+from .settings_store import load_settings, remembered, save_settings
+from .situation import (
+    NO_SITUATION,
+    group_situations,
+    load_situations,
+    situation_choices,
+)
+from .situation_sweep import (
+    SHARED_FIRST_VIEW,
+    SituationRun,
+    merge_situation_runs,
+    run_situation_sweep,
+)
+from .subject_seed import (
+    load_subject_vocabulary,
+    random_situation_names,
+    random_subject,
+)
 from .tag_filter import (
     DEFAULT_EXCLUSION_TEXT,
     EXCLUDED_TAGS_PATH,
@@ -17,12 +37,19 @@ from .tag_filter import (
 )
 from .web_service import (
     DEFAULT_COMPILER_MODEL,
+    DEFAULT_GPU_WAIT_GB,
+    GPU_BUSY_CHOICES,
+    GPU_BUSY_CPU,
     DEFAULT_NEXT_PANEL_CHANGE,
+    DEFAULT_NEXT_PANEL_TIME,
     DEFAULT_OLLAMA_URL,
     DEFAULT_ROUTER_MODEL,
     DEFAULT_SCENE_MODEL,
     DEFAULT_SCENE_TEMPLATE,
     DEFAULT_VISION_MODEL,
+    SCENE_MODEL_CHOICES,
+    TEXT_MODEL_CHOICES,
+    VISION_MODEL_CHOICES,
     WEB_RUN_FIELDS,
     ProgressCallback,
     WebPromptService,
@@ -32,7 +59,99 @@ from .web_service import (
 
 
 web_app = typer.Typer(help="Launch the local Danbooru Prompt Workbench web UI.")
+
+
+@dataclass(frozen=True)
+class Task:
+    """One entry in the task selector, and everything that follows from it."""
+
+    action: str
+    label: str
+    fields: frozenset[str]
+
+
+# What the user is trying to do, asked first. Everything the answer cannot reach
+# is hidden, because a control that does nothing for the selected task is worse
+# than a missing one: it invites a setting that will be silently ignored. One
+# definition per task, so a task cannot be offered without saying what it shows.
+TASKS: tuple[Task, ...] = (
+    Task(
+        "auto",
+        "おまかせ（指示から判断）",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "follow_up", "panel_change",
+             "variants", "run", "next_panel", "situation"}
+        ),
+    ),
+    # Tagging is pure ONNX: no instruction to give, no model to describe with.
+    Task("tag_image", "画像からタグを抽出", frozenset({"run"})),
+    Task(
+        "compile",
+        "テキストからプロンプト",
+        frozenset({"instruction", "follow_up", "variants", "run", "situation"}),
+    ),
+    Task(
+        "edit",
+        "既存プロンプトを編集",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "follow_up", "variants", "run",
+             "situation"}
+        ),
+    ),
+    # base_prompt earns its place here: a next panel can be asked for from a
+    # prompt alone, with no picture at all.
+    Task(
+        "next_panel",
+        "次のコマ",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "panel_change", "variants",
+             "next_panel", "situation"}
+        ),
+    ),
+    Task(
+        "scene_prompt",
+        "自然文プロンプト",
+        frozenset(
+            {"vision", "instruction", "base_prompt", "variants", "scene_template",
+             "scene_settings", "scene_prompt", "situation"}
+        ),
+    ),
+    # The review reads the description as context but takes no instruction, and
+    # it answers with one list rather than a number of variants.
+    Task("verify_tags", "タグをVLMで確認", frozenset({"vision", "run"})),
+)
+TASK_CHOICES: tuple[tuple[str, str], ...] = tuple(
+    (task.label, task.action) for task in TASKS
+)
+TASK_FIELDS: dict[str, frozenset[str]] = {task.action: task.fields for task in TASKS}
+# The order the visibility updates are returned in, so the wiring and the
+# outputs list cannot drift apart.
+TASK_FIELD_ORDER: tuple[str, ...] = (
+    "vision",
+    "instruction",
+    "base_prompt",
+    "follow_up",
+    "panel_change",
+    "variants",
+    "scene_template",
+    "situation",
+    "scene_settings",
+    "run",
+    "next_panel",
+    "scene_prompt",
+)
+
+
+def task_field_visibility(task: str) -> list[bool]:
+    """Which groups the chosen task shows, in `TASK_FIELD_ORDER`."""
+    shown = TASK_FIELDS.get(task, TASK_FIELDS["auto"])
+    return [name in shown for name in TASK_FIELD_ORDER]
+
+
 PROGRESS_LABELS = {
+    "preparing": "準備しています",
+    "gpu_wait": "他タスクのGPU使用が収まるのを待っています",
+    "cpu_fallback": "GPUが塞がっているためCPUで実行します",
     "routing": "指示を解釈しています",
     "tagging": "画像タグを推測しています",
     "vision": "VLMで構図を確認しています",
@@ -40,6 +159,8 @@ PROGRESS_LABELS = {
     "complete": "完了",
 }
 MAX_HISTORY_ITEMS = 20
+# What the situation tab writes prose with unless told otherwise.
+SWEEP_SCENE_TEMPLATE = "scene_illustration"
 MAX_OUTPUT_VARIANTS = 4
 # Prompt boxes 2-4 hold the next-panel proposals that follow box 1.
 NEXT_PANEL_SLOTS = MAX_OUTPUT_VARIANTS - 1
@@ -81,6 +202,13 @@ IMAGE_INPUT_JS = r"""
     return true;
   };
 
+  // Gradio's own dropzone exists only while the workspace is empty, and it
+  // handled that case correctly long before this file did. Taking it over
+  // gained nothing and put the first load at risk, so the handler below steps
+  // in only once there is an image in the way.
+  const workspaceHasImage = () =>
+    !!document.querySelector("#image-workspace img");
+
   const isTextEntry = (element) =>
     element instanceof Element &&
     (element.isContentEditable ||
@@ -90,10 +218,24 @@ IMAGE_INPUT_JS = r"""
   document.addEventListener("dragover", (event) => {
     if (!isImageWorkspace(event)) return;
     const types = Array.from(event.dataTransfer?.types || []);
-    if (!types.includes("Files")) event.preventDefault();
+    // A dragover nobody cancels tells the browser this is not a drop target and
+    // the drop never fires. Gradio cancels it for files while it still owns the
+    // empty workspace; once an image is loaded nobody does but us.
+    if (!types.includes("Files") || workspaceHasImage()) event.preventDefault();
   }, true);
   document.addEventListener("drop", (event) => {
     if (!isImageWorkspace(event)) return;
+    const dropped = Array.from(event.dataTransfer?.files || [])
+      .find((file) => (file.type || "").startsWith("image/"));
+    if (dropped) {
+      if (!workspaceHasImage()) return;
+      // Feed the file in the same way a paste does, rather than leaving it to a
+      // dropzone that is not there when the workspace already holds an image.
+      event.preventDefault();
+      event.stopPropagation();
+      loadImageFile(dropped);
+      return;
+    }
     if (event.dataTransfer?.files?.length) return;
     const uriList = event.dataTransfer?.getData("text/uri-list") || "";
     const plainText = event.dataTransfer?.getData("text/plain") || "";
@@ -130,6 +272,45 @@ IMAGE_INPUT_JS = r"""
   }, true);
 }
 """
+
+
+# The output already groups tags; these are the same groups as copyable parts,
+# so a prompt can be reused piecewise - the character without the scene, the
+# clothing without the pose.
+PART_LABELS: tuple[tuple[str, str], ...] = (
+    ("subject", "人物"),
+    ("appearance", "外見"),
+    ("clothing", "服装"),
+    ("pose", "ポーズ"),
+    ("scene", "情景"),
+    ("style", "画風"),
+    ("composition", "構図"),
+    ("other", "その他"),
+)
+
+
+def prompt_parts(prompt: str) -> dict[str, str]:
+    """The grouped tag lines of a prompt, by category.
+
+    Read back from the prompt box rather than kept from the run, so an edited
+    box and an adopted candidate both give the parts you can see.
+    """
+    tags = normalize_tags(parse_tag_text(_prompt_body(prompt)))
+    return {
+        category: ", ".join(values) for category, values in group_tags(tags).items()
+    }
+
+
+def _prompt_body(prompt: str) -> str:
+    """The tags out of a grouped block, without its `category:` labels."""
+    lines: list[str] = []
+    for line in (prompt or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("===") or stripped.startswith("["):
+            continue
+        _label, sep, rest = stripped.partition(":")
+        lines.append(rest if sep else stripped)
+    return ", ".join(lines)
 
 
 def prepend_history(
@@ -223,6 +404,10 @@ class WorkbenchOutputs:
     status: str
     candidates: list[str]
     history: list[dict[str, str]]
+    # Empty on the error paths, which have no result to write prose from.
+    prose_prompt: str = ""
+    prose_plain: str = ""
+    prose_avoid: str = ""
 
 
 def run_workbench(
@@ -288,6 +473,12 @@ def run_workbench(
     status = result.status
     if follow_up is not None:
         status += f"\n\n次のコマ: {len(follow_up.candidates)}件"
+        # Only what the follow-up learned about the panels is worth carrying up;
+        # the rest of its status just repeats what is already above. Without
+        # this the sentence the model wrote about each panel was thrown away,
+        # and the run looked like it had explained nothing.
+        if follow_up.panel_note:
+            status += f"\n\n{follow_up.panel_note}"
     elif follow_up_error:
         status += f"\n\n次のコマの生成に失敗: {follow_up_error}"
     updated_history = prepend_history(
@@ -301,6 +492,9 @@ def run_workbench(
         inferred_tags=result.inferred_tags,
         image_description=result.image_description,
         prompts=prompt_box_values(candidates),
+        prose_prompt=result.prose_prompt,
+        prose_plain=result.prose_plain,
+        prose_avoid=result.prose_avoid,
         status=status,
         candidates=candidates,
         history=updated_history,
@@ -333,6 +527,40 @@ def _merge_candidates(
     return [*result.candidates[:1], *follow_up.candidates[:NEXT_PANEL_SLOTS]]
 
 
+def _prompt_updates(gr, prompts: list[str]):
+    """Show a prompt box only once it has something in it.
+
+    Four empty boxes are the tallest thing on an untouched page and they teach
+    nothing; a run that answers with one list should leave one box behind.
+    """
+    return [gr.update(value=value, visible=bool(value)) for value in prompts]
+
+
+def _situation_outputs(gr, runs: list[SituationRun], *, as_prose: bool, view: str):
+    """The shared prompt and the merged one, shown only once they hold something."""
+    shared, merged = merge_situation_runs(runs, as_prose=as_prose, view=view)
+    return [
+        gr.update(value=shared, visible=bool(shared)),
+        gr.update(value=merged, visible=bool(merged)),
+    ]
+
+
+def _situation_summary(gr, runs: list[SituationRun]):
+    """The shared avoid list, and what the sweep managed."""
+    avoid = next((run.avoid for run in runs if run.avoid), "")
+    failed = [run.label for run in runs if run.error]
+    summary = f"{len(runs) - len(failed)}件を生成しました。"
+    if failed:
+        summary += "失敗: " + "、".join(failed)
+    # Said once for the sweep rather than once per run: it is the same card and
+    # the same decision every time, and a run that took four times as long
+    # because it stayed off the GPU should say so.
+    note = next((run.gpu_note for run in runs if run.gpu_note), "")
+    if note:
+        summary += f"\n\n{note}"
+    return [gr.update(value=avoid, visible=bool(avoid)), summary]
+
+
 def build_app(*, service: WebPromptService | None = None):
     try:
         import gradio as gr
@@ -340,11 +568,15 @@ def build_app(*, service: WebPromptService | None = None):
         raise RuntimeError("Web UI dependencies are missing; run 'uv sync --extra web'.") from exc
 
     prompt_service = service or WebPromptService()
+    stored = load_settings()
 
     def dispatch(values, progress, *, action_override: str | None = None):
         """Gradio adapter: ordered values in, Gradio component updates out."""
         *run_values, history = values
         request = WebRunRequest.from_values(run_values)
+        # Saved from the request rather than from a button, so the settings that
+        # come back are the ones that were actually last run with.
+        save_settings(request.model_dump())
         if action_override is not None:
             request = request.model_copy(update={"action_override": action_override})
 
@@ -361,7 +593,10 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.action_plan,
             outputs.inferred_tags,
             outputs.image_description,
-            *outputs.prompts,
+            *_prompt_updates(gr, outputs.prompts),
+            gr.update(value=outputs.prose_plain, visible=bool(outputs.prose_plain)),
+            gr.update(value=outputs.prose_avoid, visible=bool(outputs.prose_avoid)),
+            outputs.prose_prompt,
             outputs.status,
             gr.Radio(
                 choices=outputs.candidates,
@@ -371,31 +606,136 @@ def build_app(*, service: WebPromptService | None = None):
             outputs.history,
         )
 
-    def handle_request(*values, progress=gr.Progress()):
+    # gradio.helpers.special_args reads the signature from the left and stops at
+    # the first parameter that is not positional, so a trailing keyword-only
+    # progress is never recognised: the handler then gets an unwired Progress
+    # whose calls go nowhere, and the browser shows only "processing | 47.2s".
+    # Leading it is what gets the reports onto the queue.
+    def handle_request(progress=gr.Progress(), *values):
         return dispatch(values, progress)
 
-    def handle_scene_prompt(*values, progress=gr.Progress()):
+    def handle_scene_prompt(progress=gr.Progress(), *values):
         return dispatch(values, progress, action_override="scene_prompt")
 
-    def handle_next_panel(*values, progress=gr.Progress()):
+    def handle_next_panel(progress=gr.Progress(), *values):
         # An image alone is enough here; the router would otherwise read a
         # missing instruction as a request for plain tag extraction.
         return dispatch(values, progress, action_override="next_panel")
 
+    situations = load_situations()
+    vocabulary = load_subject_vocabulary()
+
     with gr.Blocks(title="Danbooru Prompt Workbench") as demo:
         gr.HTML("<style>.url-drop-bridge { display: none !important; }</style>")
-        gr.Markdown(
-            "# Danbooru Prompt Workbench\n"
-            "画像を置いて日本語で指示するだけで、Danbooru形式のプロンプトを生成します。"
+        with gr.Tabs():
+            # The workbench is first and opens by default: the situation sweep
+            # is one thing you might want, not the way in.
+            with gr.Tab("ワークベンチ", elem_id="workbench-tab"):
+                task = _build_task_selector(gr, stored)
+                with gr.Row():
+                    image = _build_image_column(gr, stored)
+                    controls = _build_instruction_column(gr, stored)
+                results = _build_result_section(gr)
+                with gr.Row():
+                    settings = _build_advanced_settings(gr, stored)
+                    results = SimpleNamespace(
+                        **vars(results), **vars(_build_run_details(gr))
+                    )
+            sweep = _build_situation_tab(gr, situations)
+
+        # A field name can own more than one component - a button and the hint
+        # that explains it have to appear and disappear together.
+        task_components = {
+            "vision": [image.vision_box],
+            "instruction": [controls.instruction],
+            "base_prompt": [controls.base_prompt_box],
+            "follow_up": [controls.follow_up_box],
+            "panel_change": [controls.next_panel_box],
+            "variants": [controls.variants_box],
+            "scene_template": [controls.scene_template],
+            "situation": [controls.situation],
+            "scene_settings": [settings.scene_settings_box],
+            "run": [controls.run_button],
+            "next_panel": [controls.next_panel_button],
+            "scene_prompt": [controls.scene_prompt_button],
+        }
+        assert tuple(task_components) == TASK_FIELD_ORDER
+        # The page opens on the remembered task, so the built-in visibility
+        # would otherwise be a layout for a task nobody selected.
+        initial = dict(
+            zip(
+                TASK_FIELD_ORDER,
+                task_field_visibility(task.action_override.value),
+            )
         )
-        with gr.Row():
-            image = _build_image_column(gr)
-            controls = _build_instruction_column(gr)
-        settings = _build_advanced_settings(gr)
-        results = _build_result_section(gr)
+        for name, components in task_components.items():
+            for component in components:
+                component.visible = initial[name]
+
+        # These two sit beside 実行 under おまかせ, but stand alone under their own
+        # task, and the only action on the page should not look like a secondary one.
+        promotable = {
+            "next_panel": controls.next_panel_button,
+            "scene_prompt": controls.scene_prompt_button,
+        }
+
+        def show_task_fields(selected: str):
+            shown = dict(zip(TASK_FIELD_ORDER, task_field_visibility(selected)))
+            updates = []
+            for name in TASK_FIELD_ORDER:
+                for component in task_components[name]:
+                    if promotable.get(name) is component:
+                        updates.append(
+                            gr.update(
+                                visible=shown[name],
+                                variant="secondary" if shown["run"] else "primary",
+                            )
+                        )
+                    else:
+                        updates.append(gr.update(visible=shown[name]))
+            return updates
+
+        task.action_override.change(
+            show_task_fields,
+            inputs=task.action_override,
+            outputs=[
+                component
+                for name in TASK_FIELD_ORDER
+                for component in task_components[name]
+            ],
+            queue=False,
+        )
+
+        def show_parts(prompt: str):
+            found = prompt_parts(prompt)
+            return [
+                gr.update(visible=bool(found)),
+                *(
+                    gr.update(
+                        value=found.get(category, ""),
+                        visible=bool(found.get(category)),
+                    )
+                    for category, _label in PART_LABELS
+                ),
+            ]
+
+        # Driven by the box rather than by the run, so an edited prompt and an
+        # adopted candidate both split into the parts you can actually see.
+        results.prompts[0].change(
+            show_parts,
+            inputs=results.prompts[0],
+            outputs=[results.parts_box, *results.parts],
+            queue=False,
+        )
 
         inputs = [
-            *_run_inputs(image=image, controls=controls, settings=settings, results=results),
+            *_run_inputs(
+                task=task,
+                image=image,
+                controls=controls,
+                settings=settings,
+                results=results,
+            ),
             results.history_state,
         ]
         outputs = [
@@ -403,6 +743,9 @@ def build_app(*, service: WebPromptService | None = None):
             results.inferred_tags,
             image.description,
             *results.prompts,
+            results.prose_plain,
+            results.prose_avoid,
+            results.prose_prompt,
             results.status,
             results.candidate_selector,
             results.history_state,
@@ -429,7 +772,10 @@ def build_app(*, service: WebPromptService | None = None):
                 "",
                 "",
                 "",
-                *blank_prompt_boxes(),
+                *_prompt_updates(gr, blank_prompt_boxes()),
+                gr.update(value="", visible=False),
+                gr.update(value="", visible=False),
+                "",
                 gr.Radio(choices=[], value=None),
                 {},
                 status,
@@ -454,6 +800,9 @@ def build_app(*, service: WebPromptService | None = None):
             image.description,
             controls.base_prompt,
             *results.prompts,
+            results.prose_plain,
+            results.prose_avoid,
+            results.prose_prompt,
             results.candidate_selector,
             results.action_plan,
             results.status,
@@ -461,18 +810,18 @@ def build_app(*, service: WebPromptService | None = None):
         image.workspace.input(
             handle_image_upload,
             inputs=image.workspace,
-            outputs=[image.active_file, image.url_input, *cleared_outputs],
+            outputs=[image.active_file, settings.url_input, *cleared_outputs],
             queue=False,
         )
         image_url_outputs = [
             image.workspace,
             image.active_file,
-            image.url_input,
+            settings.url_input,
             *cleared_outputs,
         ]
-        image.url_button.click(
+        settings.url_button.click(
             handle_image_url,
-            inputs=[image.url_input, settings.allow_private_image_urls],
+            inputs=[settings.url_input, settings.allow_private_image_urls],
             outputs=image_url_outputs,
             queue=False,
         )
@@ -542,6 +891,185 @@ def build_app(*, service: WebPromptService | None = None):
             cancels=[run_event, next_panel_event, scene_prompt_event, submit_event],
             queue=False,
         )
+
+        def run_sweep(progress, chosen, subject, style, view, settings_values):
+            """The sweep itself, once the situations and subject are settled."""
+            as_prose = style == "prose"
+            if not chosen:
+                return [
+                    gr.update(value="", visible=False),
+                    gr.update(value="", visible=False),
+                    gr.update(value="", visible=False),
+                    "シチュエーションを1つ以上選んでください。",
+                    [],
+                ]
+            (
+                template,
+                ollama_url,
+                compiler_model,
+                scene_model,
+                gpu_wait_gb,
+                gpu_busy_action,
+                apply_tag_exclusions,
+                excluded_tags,
+            ) = settings_values
+            runs = run_situation_sweep(
+                prompt_service,
+                chosen,
+                {item.name: item.label for item in situations},
+                instruction=(subject or "").strip(),
+                as_prose=as_prose,
+                options={
+                    "ollama_url": ollama_url,
+                    "compiler_model": compiler_model,
+                    "scene_model": scene_model or compiler_model,
+                    "scene_template": template,
+                    "gpu_wait_gb": gpu_wait_gb,
+                    "gpu_busy_action": gpu_busy_action,
+                    "apply_tag_exclusions": apply_tag_exclusions,
+                    "excluded_tags": excluded_tags,
+                },
+                # The sweep writes the whole line - situation, stage, clock -
+                # so what arrives here is ready to show as it is.
+                on_progress=lambda line, fraction: progress(fraction, desc=line),
+                stage_labels=PROGRESS_LABELS,
+            )
+            return [
+                *_situation_outputs(gr, runs, as_prose=as_prose, view=view),
+                *_situation_summary(gr, runs),
+                # Kept so switching between the two shapes re-reads the same
+                # answers instead of asking the models for them again.
+                (runs, as_prose),
+            ]
+
+        def _chosen_and_rest(values):
+            """The ticked situations, in page order, and everything after them."""
+            picks = set()
+            for group in values[: len(sweep.pickers)]:
+                picks.update(group or [])
+            return (
+                [item.name for item in situations if item.name in picks],
+                values[len(sweep.pickers) :],
+            )
+
+        def handle_situation_sweep(progress=gr.Progress(), *values):
+            # The picks arrive one list per category, so they are gathered back
+            # into the order the situations are defined in - the blocks should
+            # read the way the groups do, not in the order they were ticked.
+            chosen, rest = _chosen_and_rest(values)
+            subject, style, view, *settings_values = rest
+            return run_sweep(progress, chosen, subject, style, view, settings_values)
+
+        def handle_random_sweep(progress=gr.Progress(), *values):
+            """Invent a subject, pick the situations, and run - in one call.
+
+            Chained as two events this raced: the second press ran on the
+            values the first press had left behind, because the randomised ones
+            had not reached the browser and come back yet. It finished in a
+            second with the previous answer still on screen. Deciding and
+            running in the same call cannot get that wrong; the picks are
+            returned alongside the answers so they still show in the controls,
+            which is what lets a random run be adjusted and repeated.
+            """
+            count, *rest_values = values
+            _ignored, rest = _chosen_and_rest(rest_values)
+            _typed_subject, style, view, *settings_values = rest
+            chosen = random_situation_names(
+                [item.name for item in situations], int(count or 1)
+            )
+            subject = random_subject(vocabulary, as_prose=style == "prose")
+            picked = set(chosen)
+            return [
+                subject,
+                *(
+                    gr.update(
+                        value=[item.name for item in members if item.name in picked]
+                    )
+                    for _category, members in group_situations(situations)
+                ),
+                *run_sweep(progress, chosen, subject, style, view, settings_values),
+            ]
+
+        # Named once: the random path runs on the same controls, and two lists
+        # kept in step by hand would drift the first time a setting was added
+        # to one of them. The random path prepends its own count.
+        situation_inputs = [
+            *sweep.pickers,
+            sweep.subject,
+            sweep.output_style,
+            sweep.view,
+            sweep.template,
+            settings.ollama_url,
+            settings.compiler_model,
+            settings.scene_model,
+            settings.gpu_wait_gb,
+            settings.gpu_busy_action,
+            settings.apply_tag_exclusions,
+            settings.excluded_tags,
+        ]
+        situation_outputs = [
+            sweep.shared,
+            sweep.merged,
+            sweep.avoid,
+            sweep.status,
+            sweep.runs_state,
+        ]
+        situation_event = sweep.run_button.click(
+            handle_situation_sweep,
+            inputs=situation_inputs,
+            outputs=situation_outputs,
+            # Drawn on the status line under the button. Left to Gradio's own
+            # choice it went onto the output boxes, which are all hidden on the
+            # first run - so the run that most needs reporting reported nothing.
+            show_progress_on=sweep.status,
+            api_name="run_situation_sweep",
+            concurrency_limit=1,
+        )
+
+        def handle_situation_view(view: str, state):
+            runs, as_prose = state if state else ([], False)
+            return _situation_outputs(gr, runs, as_prose=as_prose, view=view)
+
+        sweep.view.change(
+            handle_situation_view,
+            inputs=[sweep.view, sweep.runs_state],
+            outputs=[sweep.shared, sweep.merged],
+            queue=False,
+        )
+        grouped_situations = group_situations(situations)
+        random_event = sweep.random_button.click(
+            handle_random_sweep,
+            inputs=[sweep.random_count, *situation_inputs],
+            outputs=[sweep.subject, *sweep.pickers, *situation_outputs],
+            show_progress_on=sweep.status,
+            api_name="run_random_situations",
+            concurrency_limit=1,
+        )
+        sweep.cancel_button.click(
+            fn=None, cancels=[situation_event, random_event], queue=False
+        )
+        sweep.select_all_button.click(
+            lambda: [
+                gr.update(value=[item.name for item in members])
+                for _category, members in grouped_situations
+            ],
+            outputs=sweep.pickers,
+            queue=False,
+        )
+        # Forty-six ticks are quicker to undo than to undo one at a time.
+        sweep.clear_button.click(
+            lambda: [gr.update(value=[]) for _ in sweep.pickers],
+            outputs=sweep.pickers,
+            queue=False,
+        )
+        # The template only shapes prose, so it is only asked for when prose is
+        # what was chosen.
+        sweep.output_style.change(
+            lambda style: gr.update(visible=style == "prose"),
+            inputs=sweep.output_style,
+            outputs=sweep.template,
+            queue=False,
+        )
         demo.load(
             fn=None,
             js=IMAGE_INPUT_JS,
@@ -552,11 +1080,11 @@ def build_app(*, service: WebPromptService | None = None):
     return demo
 
 
-def _run_inputs(*, image, controls, settings, results) -> list:
+def _run_inputs(*, task, image, controls, settings, results) -> list:
     """One component per WebRunRequest field, ordered by that single definition."""
     run_components = {
         "image_path": image.active_file,
-        "image_url": image.url_input,
+        "image_url": settings.url_input,
         "instruction": controls.instruction,
         "base_prompt": controls.base_prompt,
         "router_model": settings.router_model,
@@ -568,14 +1096,21 @@ def _run_inputs(*, image, controls, settings, results) -> list:
         "variants": controls.variants,
         "generate_next_panel": controls.generate_next_panel,
         "next_panel_change": controls.next_panel_change,
+        "next_panel_time": controls.next_panel_time,
+        "next_panel_chain": controls.next_panel_chain,
         "scene_template": controls.scene_template,
+        "situation": controls.situation,
         "scene_model": settings.scene_model,
+        "scene_sees_image": settings.scene_sees_image,
+        "also_prose": controls.also_prose,
         "edited_tags": results.inferred_tags,
         "edited_description": image.description,
-        "action_override": settings.action_override,
+        "action_override": task.action_override,
         "use_vision": image.use_vision,
         "vision_model": settings.vision_model,
         "allow_private_image_urls": settings.allow_private_image_urls,
+        "gpu_wait_gb": settings.gpu_wait_gb,
+        "gpu_busy_action": settings.gpu_busy_action,
         "apply_tag_exclusions": settings.apply_tag_exclusions,
         "excluded_tags": settings.excluded_tags,
     }
@@ -585,7 +1120,18 @@ def _run_inputs(*, image, controls, settings, results) -> list:
     return [run_components[name] for name in WEB_RUN_FIELDS]
 
 
-def _build_image_column(gr) -> SimpleNamespace:
+def _build_task_selector(gr, stored: dict) -> SimpleNamespace:
+    """The first question, and the one that decides what the rest of the page shows."""
+    action_override = gr.Radio(
+        choices=list(TASK_CHOICES),
+        value=remembered(stored, "action_override", "auto"),
+        label="やりたいこと",
+        elem_id="task-selector",
+    )
+    return SimpleNamespace(action_override=action_override)
+
+
+def _build_image_column(gr, stored: dict) -> SimpleNamespace:
     """Unified image workspace plus the hidden bridge that URL drops write into."""
     with gr.Column():
         workspace = gr.Image(
@@ -593,7 +1139,7 @@ def _build_image_column(gr) -> SimpleNamespace:
             sources=["upload"],
             label="画像",
             placeholder="ここへ画像をドロップ、クリックして選択、または Ctrl+V で貼り付け",
-            height=400,
+            height=150,
             interactive=True,
             elem_id="image-workspace",
             buttons=["fullscreen"],
@@ -614,6 +1160,231 @@ def _build_image_column(gr) -> SimpleNamespace:
             elem_id="dropped-image-url-button",
             elem_classes="url-drop-bridge",
         )
+        with gr.Group() as vision_box:
+            # The switch and its recovery button share one line: the button is
+            # pressed rarely, and a row of its own cost 40px on every page.
+            with gr.Row():
+                use_vision = gr.Checkbox(
+                    value=remembered(stored, "use_vision", True),
+                    label="VLMで画像を説明する",
+                    info="ポーズや位置関係の解析にも使います。",
+                    scale=3,
+                )
+                recover_vision_button = gr.Button(
+                    "VLMを復旧",
+                    elem_id="recover-vision-button",
+                    size="sm",
+                    scale=1,
+                )
+            # The hint only matters once the button has been pressed, so it
+            # takes no room on the page before then.
+            recover_vision_status = gr.Markdown()
+            description = gr.Textbox(
+                label="画像の説明（VLM）",
+                lines=2,
+                buttons=["copy"],
+                interactive=True,
+                elem_id="image-description-editor",
+                placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
+            )
+    return SimpleNamespace(
+        workspace=workspace,
+        vision_box=vision_box,
+        active_file=active_file,
+        dropped_url=dropped_url,
+        dropped_url_button=dropped_url_button,
+        use_vision=use_vision,
+        description=description,
+        recover_vision_button=recover_vision_button,
+        recover_vision_status=recover_vision_status,
+    )
+
+
+def _build_instruction_column(gr, stored: dict) -> SimpleNamespace:
+    """Instruction, optional base prompt, output count, and the run controls."""
+    with gr.Column():
+        instruction = gr.Textbox(
+            label="どうしたい？",
+            placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
+            lines=2,
+        )
+        with gr.Accordion("既存プロンプトから編集（任意）", open=False) as base_prompt_box:
+            base_prompt = gr.Textbox(
+                label="既存プロンプト",
+                placeholder="画像の代わりに既存タグを編集するときに入力",
+                lines=4,
+                elem_id="base-prompt-input",
+            )
+        with gr.Row() as follow_up_box:
+            generate_next_panel = gr.Checkbox(
+                value=remembered(stored, "generate_next_panel", True),
+                label="次のコマも生成する（出力2〜4）",
+            )
+            also_prose = gr.Checkbox(
+                value=remembered(stored, "also_prose", True),
+                label="英文プロンプトも出す",
+                elem_id="also-prose-input",
+            )
+        # Two axes of the same question, so they sit on one line and toggle as one.
+        with gr.Row() as next_panel_box:
+            next_panel_time = gr.Slider(
+                0.0,
+                1.0,
+                value=remembered(stored, "next_panel_time", DEFAULT_NEXT_PANEL_TIME),
+                step=0.1,
+                label="経過する時間",
+                elem_id="next-panel-time",
+            )
+            next_panel_chain = gr.Checkbox(
+                value=remembered(stored, "next_panel_chain", False),
+                label="1コマずつ進める",
+                elem_id="next-panel-chain",
+            )
+            next_panel_change = gr.Slider(
+                0.0,
+                1.0,
+                value=remembered(stored, "next_panel_change", DEFAULT_NEXT_PANEL_CHANGE),
+                step=0.1,
+                label="変わってよい範囲",
+                elem_id="next-panel-change",
+            )
+        scene_template = gr.Dropdown(
+            choices=[(template.label, template.name) for template in load_templates()],
+            value=remembered(stored, "scene_template", DEFAULT_SCENE_TEMPLATE),
+            label="自然文プロンプトのテンプレート",
+            elem_id="scene-template",
+            visible=False,
+            info="「自然文プロンプト」で使う骨組みです。templates/ にYAMLを足せば増やせます。",
+        )
+        with gr.Row() as variants_box:
+            # container=False drops Gradio's label with its padding, so the
+            # label is written beside the pills on the same line instead.
+            gr.Markdown("出力数", container=False, scale=0)
+            variants = gr.Radio(
+                choices=[1, 2, 3, 4],
+                value=remembered(stored, "variants", 4),
+                label="出力数",
+                container=False,
+                scale=4,
+            )
+        # Its own line, with its own label. Sharing the output count's row saved
+        # 43px and cost the control its name - container=False takes the label
+        # with it - so it read as an unexplained box belonging to 出力数, whose
+        # own choices it pushed onto a second line.
+        situation = gr.Dropdown(
+            choices=situation_choices(load_situations()),
+            value=remembered(stored, "situation", NO_SITUATION),
+            label="シチュエーション",
+            elem_id="situation-input",
+            info="日常・戦闘などの方向づけ。これだけでも生成できます。",
+        )
+        with gr.Row():
+            run_button = gr.Button("実行", variant="primary")
+            next_panel_button = gr.Button(
+                "次のコマ",
+                elem_id="next-panel-button",
+            )
+            scene_prompt_button = gr.Button(
+                "自然文プロンプト",
+                elem_id="scene-prompt-button",
+                visible=False,
+            )
+            cancel_button = gr.Button("停止", variant="stop")
+    return SimpleNamespace(
+        instruction=instruction,
+        base_prompt=base_prompt,
+        base_prompt_box=base_prompt_box,
+        variants=variants,
+        variants_box=variants_box,
+        generate_next_panel=generate_next_panel,
+        follow_up_box=follow_up_box,
+        also_prose=also_prose,
+        next_panel_change=next_panel_change,
+        next_panel_time=next_panel_time,
+        next_panel_chain=next_panel_chain,
+        next_panel_box=next_panel_box,
+        scene_template=scene_template,
+        situation=situation,
+        scene_prompt_button=scene_prompt_button,
+        run_button=run_button,
+        next_panel_button=next_panel_button,
+        cancel_button=cancel_button,
+    )
+
+
+def _build_advanced_settings(gr, stored: dict) -> SimpleNamespace:
+    """Folded models, diagnostics, tagging thresholds, and exclusion words."""
+    with gr.Accordion("詳細設定", open=False):
+        with gr.Row():
+            router_model = gr.Dropdown(
+                choices=list(TEXT_MODEL_CHOICES),
+                value=remembered(stored, "router_model", DEFAULT_ROUTER_MODEL),
+                allow_custom_value=True,
+                label="指示ルーターモデル",
+            )
+            compiler_model = gr.Dropdown(
+                choices=list(TEXT_MODEL_CHOICES),
+                value=remembered(stored, "compiler_model", DEFAULT_COMPILER_MODEL),
+                allow_custom_value=True,
+                label="プロンプト生成モデル",
+            )
+            ollama_url = gr.Textbox(
+                value=remembered(stored, "ollama_url", DEFAULT_OLLAMA_URL),
+                label="Ollama URL",
+            )
+            vision_model = gr.Dropdown(
+                choices=list(VISION_MODEL_CHOICES),
+                value=remembered(stored, "vision_model", DEFAULT_VISION_MODEL),
+                allow_custom_value=True,
+                label="VLMモデル",
+                info=(
+                    "一覧にないモデルは直接入力できます。"
+                    "既定のモデルが説明を拒否・省略する画像では無検閲のものを選んでください。"
+                ),
+            )
+        with gr.Group(visible=False) as scene_settings_box:
+            scene_model = gr.Dropdown(
+                choices=list(SCENE_MODEL_CHOICES),
+                value=remembered(stored, "scene_model", DEFAULT_SCENE_MODEL),
+                allow_custom_value=True,
+                label="自然文プロンプト用モデル",
+                elem_id="scene-model-input",
+                info="英文の作文はタグ生成より重いので、ここだけ大きめにできます。",
+            )
+            scene_sees_image = gr.Checkbox(
+                value=False,
+                label="自然文プロンプトに画像を渡す",
+                elem_id="scene-sees-image-input",
+                info=(
+                    "自然文プロンプト用モデルがVLMのときだけ有効です。"
+                    "画像を直接見て書くぶん描写は濃くなりますが、"
+                    "タグは事実として併せて渡すので特徴は落ちません。"
+                ),
+            )
+        gpu_wait_gb = gr.Slider(
+            0.0,
+            12.0,
+            value=remembered(stored, "gpu_wait_gb", DEFAULT_GPU_WAIT_GB),
+            step=0.5,
+            label="他タスクのGPU使用とみなす閾値（GB）",
+            elem_id="gpu-wait-input",
+            info="他のプログラムがこれ以上VRAMを使っていたら、下の対応を取ります。0で無効。",
+        )
+        # Waiting was the only answer and it was the wrong one: an image
+        # generator can hold the card for an hour, and every run in that hour
+        # sat through the full two-minute wait and then crawled anyway.
+        gpu_busy_action = gr.Radio(
+            choices=list(GPU_BUSY_CHOICES),
+            value=remembered(stored, "gpu_busy_action", GPU_BUSY_CPU),
+            label="他タスクがGPUを使っているとき",
+            elem_id="gpu-busy-action",
+            info="「CPUで実行」はGPUを一切使わずに生成します。"
+            "遅くなりますが、画像生成などと同時に動かせます。",
+        )
+        allow_private_image_urls = gr.Checkbox(
+            value=remembered(stored, "allow_private_image_urls", False),
+            label="プライベート画像URLを許可",
+        )
         with gr.Accordion(
             "URLから読み込む（補助）",
             open=False,
@@ -629,183 +1400,35 @@ def _build_image_column(gr) -> SimpleNamespace:
                 elem_id="image-url-load-button",
             )
             gr.Markdown(
-                "Webページ上の画像や画像URLは、上の画像欄へ直接ドロップすることもできます。"
+                "Webページ上の画像や画像URLは、画像欄へ直接ドロップすることもできます。"
             )
-        use_vision = gr.Checkbox(
-            value=True,
-            label="VLMで画像を説明する",
-            info="ポーズや位置関係の解析にも使います。生成は少し遅くなります。",
-        )
-        with gr.Row():
-            recover_vision_button = gr.Button(
-                "VLMを復旧",
-                elem_id="recover-vision-button",
-                size="sm",
-            )
-        recover_vision_status = gr.Markdown(
-            "VLMが応答しなくなったら押してください。モデルを解放して読み込み直します。"
-        )
-        description = gr.Textbox(
-            label="画像の説明（VLM）",
-            lines=4,
-            buttons=["copy"],
-            interactive=True,
-            elem_id="image-description-editor",
-            placeholder="VLMを有効にして実行すると、画像の内容がここに入ります。",
-            info=(
-                "タグが少ないときの補足に使えます。"
-                "直接書き換えるとVLMを再実行せず、その内容をそのまま使います。"
-            ),
-        )
-    return SimpleNamespace(
-        workspace=workspace,
-        active_file=active_file,
-        dropped_url=dropped_url,
-        dropped_url_button=dropped_url_button,
-        url_input=url_input,
-        url_button=url_button,
-        use_vision=use_vision,
-        description=description,
-        recover_vision_button=recover_vision_button,
-        recover_vision_status=recover_vision_status,
-    )
-
-
-def _build_instruction_column(gr) -> SimpleNamespace:
-    """Instruction, optional base prompt, output count, and the run controls."""
-    with gr.Column():
-        instruction = gr.Textbox(
-            label="どうしたい？",
-            placeholder="例: タグを推測して / 次のコマで振り返らせて / 夜に変更して",
-            lines=5,
-        )
-        with gr.Accordion("既存プロンプトから編集（任意）", open=False):
-            base_prompt = gr.Textbox(
-                label="既存プロンプト",
-                placeholder="画像の代わりに既存タグを編集するときに入力",
-                lines=4,
-                elem_id="base-prompt-input",
-            )
-        generate_next_panel = gr.Checkbox(
-            value=True,
-            label="次のコマも生成する（出力2〜4）",
-            info="出力1に現在の結果、出力2〜4に一瞬後の場面の候補を入れます。",
-        )
-        next_panel_change = gr.Slider(
-            0.0,
-            1.0,
-            value=DEFAULT_NEXT_PANEL_CHANGE,
-            step=0.1,
-            label="次のコマの変化量",
-            elem_id="next-panel-change",
-            info=(
-                "小さいほど元の画像に忠実で、大きいほど姿勢・構図・背景まで動きます。"
-                "0.3以下は服装まで固定、0.7超はキャラクターの同一性だけ固定します。"
-            ),
-        )
-        with gr.Row():
-            variants = gr.Radio(
-                choices=[1, 2, 3, 4],
-                value=4,
-                label="出力数",
-                info="「次のコマも生成する」がオフのときの出力数です。",
-            )
-        scene_template = gr.Dropdown(
-            choices=[(template.label, template.name) for template in load_templates()],
-            value=DEFAULT_SCENE_TEMPLATE,
-            label="自然文プロンプトのテンプレート",
-            elem_id="scene-template",
-            info="「自然文プロンプト」で使う骨組みです。templates/ にYAMLを足せば増やせます。",
-        )
-        with gr.Row():
-            run_button = gr.Button("実行", variant="primary")
-            next_panel_button = gr.Button(
-                "次のコマ",
-                elem_id="next-panel-button",
-            )
-            scene_prompt_button = gr.Button(
-                "自然文プロンプト",
-                elem_id="scene-prompt-button",
-            )
-            cancel_button = gr.Button("停止", variant="stop")
-        gr.Markdown(
-            "「次のコマ」ボタンは指示がなくても押せます。画像だけを置いて押すと、"
-            "4枠すべてに一瞬後の場面を提案します。"
-        )
-    return SimpleNamespace(
-        instruction=instruction,
-        base_prompt=base_prompt,
-        variants=variants,
-        generate_next_panel=generate_next_panel,
-        next_panel_change=next_panel_change,
-        scene_template=scene_template,
-        scene_prompt_button=scene_prompt_button,
-        run_button=run_button,
-        next_panel_button=next_panel_button,
-        cancel_button=cancel_button,
-    )
-
-
-def _build_advanced_settings(gr) -> SimpleNamespace:
-    """Folded models, diagnostics, tagging thresholds, and exclusion words."""
-    with gr.Accordion("詳細設定", open=False):
-        with gr.Row():
-            router_model = gr.Textbox(
-                value=DEFAULT_ROUTER_MODEL,
-                label="指示ルーターモデル",
-            )
-            compiler_model = gr.Textbox(
-                value=DEFAULT_COMPILER_MODEL,
-                label="プロンプト生成モデル",
-            )
-            ollama_url = gr.Textbox(
-                value=DEFAULT_OLLAMA_URL,
-                label="Ollama URL",
-            )
-            vision_model = gr.Textbox(
-                value=DEFAULT_VISION_MODEL,
-                label="VLMモデル",
-            )
-            scene_model = gr.Textbox(
-                value=DEFAULT_SCENE_MODEL,
-                label="自然文プロンプト用モデル",
-                elem_id="scene-model-input",
-                info=(
-                    "英文の作文はタグ生成より重い処理です。"
-                    "ここだけ大きめのローカルモデルにできます。空欄ならプロンプト生成モデルを使います。"
-                ),
-            )
-            allow_private_image_urls = gr.Checkbox(
-                value=False,
-                label="プライベート画像URLを許可",
-            )
-        action_override = gr.Dropdown(
-            choices=[
-                ("自動判定", "auto"),
-                ("画像タグ抽出", "tag_image"),
-                ("新規プロンプト", "compile"),
-                ("既存プロンプト編集", "edit"),
-                ("次のコマ", "next_panel"),
-                ("自然文プロンプト", "scene_prompt"),
-            ],
-            value="auto",
-            label="操作種別",
-        )
         diagnostic_button = gr.Button("Ollama接続確認")
         diagnostic_output = gr.Markdown(label="Ollama診断")
         with gr.Row():
             general_threshold = gr.Slider(
-                0.0, 1.0, value=0.35, step=0.01, label="一般タグ閾値"
+                0.0,
+                1.0,
+                value=remembered(stored, "general_threshold", 0.35),
+                step=0.01,
+                label="一般タグ閾値",
             )
             character_threshold = gr.Slider(
-                0.0, 1.0, value=0.85, step=0.01, label="キャラクター閾値"
+                0.0,
+                1.0,
+                value=remembered(stored, "character_threshold", 0.85),
+                step=0.01,
+                label="キャラクター閾値",
             )
             max_image_tags = gr.Slider(
-                1, 100, value=50, step=1, label="画像タグ上限"
+                1,
+                100,
+                value=remembered(stored, "max_image_tags", 50),
+                step=1,
+                label="画像タグ上限",
             )
         with gr.Accordion("除外ワード", open=True):
             apply_tag_exclusions = gr.Checkbox(
-                value=True,
+                value=remembered(stored, "apply_tag_exclusions", True),
                 label="除外ワードを適用",
             )
             excluded_tags = gr.Textbox(
@@ -832,8 +1455,13 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         ollama_url=ollama_url,
         vision_model=vision_model,
         scene_model=scene_model,
+        scene_sees_image=scene_sees_image,
+        scene_settings_box=scene_settings_box,
         allow_private_image_urls=allow_private_image_urls,
-        action_override=action_override,
+        gpu_wait_gb=gpu_wait_gb,
+        gpu_busy_action=gpu_busy_action,
+        url_input=url_input,
+        url_button=url_button,
         diagnostic_button=diagnostic_button,
         diagnostic_output=diagnostic_output,
         general_threshold=general_threshold,
@@ -844,6 +1472,194 @@ def _build_advanced_settings(gr) -> SimpleNamespace:
         save_excluded_tags_button=save_excluded_tags_button,
         reset_excluded_tags_button=reset_excluded_tags_button,
         excluded_tags_status=excluded_tags_status,
+    )
+
+
+def _build_situation_tab(gr, situations: list) -> SimpleNamespace:
+    """One prompt per situation, from one subject, in one run.
+
+    This generates: the output is a prompt for each situation picked, ready to
+    paste. Reading them against each other is something you may then want to do
+    - 出力の見せかた is there for it - but it is not what the tab is for, and
+    calling the tab a comparison described the smaller half of it.
+
+    It needs neither an image nor a router, so it gets its own tab rather than
+    another mode of the workbench, and none of the controls that do not apply.
+    """
+    with gr.Tab("シチュエーション一括生成", elem_id="situation-tab"):
+        gr.Markdown(
+            "シチュエーションごとにプロンプトを1件ずつ作り、1つにまとめて返します。"
+            "画像は使いません。"
+            "「おまかせ生成」は主題とシチュエーションをその場でランダムに決めて、"
+            "そのまま最後まで実行します。何も入力・選択しなくて構いません。"
+            "1件につきモデルを1回呼ぶので、件数を増やすとその分だけ時間がかかります。"
+        )
+        # What to make and what came out, side by side at the top; the picker
+        # gets its own full-width row underneath. Stacked, the answers began
+        # below the fold however few there were. Moved into this column with
+        # the picker, the picker doubled in height at half the width and took
+        # the run button off the screen instead - it is five short rows wide
+        # and ten tall, so width is what it wants.
+        with gr.Row():
+            # The controls need less room than the answers do, and prose runs
+            # to long lines.
+            with gr.Column(scale=2):
+                subject = gr.Textbox(
+                    label="共通の主題（任意）",
+                    placeholder="例: 弓を持った銀髪のエルフ",
+                    lines=2,
+                    elem_id="situation-subject",
+                    info="すべてのシチュエーションで共通の人物・場面。"
+                    "空欄ならシチュエーションだけで生成します。",
+                )
+                with gr.Row():
+                    output_style = gr.Radio(
+                        choices=[("タグ", "tags"), ("自然文", "prose")],
+                        value="tags",
+                        label="出力形式",
+                        elem_id="situation-style",
+                    )
+                    # A character sheet is the same character rendered
+                    # neutrally, so its Lighting and Layout slots ("key light
+                    # direction", "framing, camera distance") have nothing to
+                    # do with the moment and came back word for word in every
+                    # situation. A scene illustration asks about place, time of
+                    # day and mood, which is what a situation actually changes.
+                    template = gr.Dropdown(
+                        choices=[(item.label, item.name) for item in load_templates()],
+                        value=SWEEP_SCENE_TEMPLATE,
+                        label="自然文プロンプトのテンプレート",
+                        visible=False,
+                        elem_id="situation-template",
+                    )
+                # The hands-off path first, and it is the primary one:
+                # choosing a subject and a handful of situations by hand is the
+                # part of a sweep that is work rather than result.
+                random_count = gr.Slider(
+                    1,
+                    8,
+                    value=3,
+                    step=1,
+                    label="おまかせで選ぶ件数",
+                    elem_id="situation-random-count",
+                )
+                with gr.Row():
+                    random_button = gr.Button(
+                        "おまかせ生成",
+                        variant="primary",
+                        scale=3,
+                        elem_id="situation-random",
+                    )
+                    # A sweep is one model call per situation, so it runs long
+                    # enough that leaving without a way to stop it would be its
+                    # own bug.
+                    cancel_button = gr.Button(
+                        "停止", variant="stop", scale=1, elem_id="situation-cancel"
+                    )
+                # Two rows rather than four buttons across half the page: at
+                # that width the fourth wrapped onto a line of its own anyway,
+                # and wrapped it was 停止 that got the whole line.
+                with gr.Row():
+                    select_all_button = gr.Button("すべて選択")
+                    clear_button = gr.Button("選択解除")
+                run_button = gr.Button("選んだ分を生成", elem_id="situation-run")
+                # Under the buttons, because the progress is drawn on it and
+                # this is the column the buttons are in. Put with the results
+                # instead it sat 308px away and above the button that starts
+                # the run, so pressing it changed nothing anywhere near where
+                # it was pressed - which reads as a button that does nothing.
+                # It carries a line from the start: an empty Markdown is zero
+                # pixels tall, and the progress is drawn inside it.
+                status = gr.Markdown(
+                    "シチュエーションを選んで「おまかせ生成」を押してください。",
+                    elem_id="situation-status",
+                )
+            with gr.Column(scale=3):
+                # 全文 first and by default: what this tab produces is prompts
+                # to paste, and a text holding only the lines that differ is
+                # not one. 違いだけ is for reading the set, which is a second
+                # thing you may want to do with it rather than what it is for.
+                view = gr.Radio(
+                    choices=[
+                        ("共通をまとめる", SHARED_FIRST_VIEW),
+                        ("ブロックごとに完結", "full"),
+                    ],
+                    value=SHARED_FIRST_VIEW,
+                    label="出力の見せかた",
+                    elem_id="situation-view",
+                    info="「共通をまとめる」は先頭に共通ブロックを置き、"
+                    "以降の各ブロックからその分を除きます。"
+                    "「ブロックごとに完結」は各ブロック単体で完成形になります。",
+                )
+                shared = gr.Textbox(
+                    label="共通プロンプト",
+                    lines=3,
+                    buttons=["copy"],
+                    interactive=True,
+                    visible=False,
+                    elem_id="situation-shared",
+                    info="どのシチュエーションでも同じだった部分です。"
+                    "「共通をまとめる」では統合プロンプトの先頭ブロックと同じもので、"
+                    "土台だけを取り出したいとき用です。",
+                )
+                # One text rather than a box per situation: up to forty-six
+                # boxes is not a result anyone reads, it is a haystack. Joined
+                # carelessly it would be worse than the boxes, so the format is
+                # stated and `split_situation_blocks` undoes it.
+                merged = gr.Textbox(
+                    label="統合プロンプト",
+                    lines=16,
+                    max_lines=28,
+                    buttons=["copy"],
+                    interactive=True,
+                    visible=False,
+                    elem_id="situation-merged",
+                    info="空行区切り、各ブロックの先頭が「# 番号 シチュエーション名」です。"
+                    "空行で分割し、先頭行を外せば各ブロックの中身になります。"
+                    "「共通をまとめる」では、先頭の「# 共通」と各ブロックを"
+                    "合わせて1件分です。",
+                )
+                # Shared rather than one per block: the avoid list comes from
+                # the exclusion rules, so it is the same for every situation.
+                avoid = gr.Textbox(
+                    label="除外（ネガティブプロンプト）",
+                    lines=2,
+                    buttons=["copy"],
+                    interactive=True,
+                    visible=False,
+                    elem_id="situation-avoid",
+                )
+        # Full width, which is what keeps it to five short rows. One group per
+        # category rather than one list of forty-odd, and the groups come from
+        # the files: a new situation joins its category and a new category
+        # appears on its own, neither needing this page changed.
+        pickers = []
+        for category, members in group_situations(situations):
+            pickers.append(
+                gr.CheckboxGroup(
+                    choices=[(item.label, item.name) for item in members],
+                    value=[],
+                    label=category,
+                    elem_id=f"situation-picker-{len(pickers) + 1}",
+                )
+            )
+    return SimpleNamespace(
+        subject=subject,
+        output_style=output_style,
+        template=template,
+        pickers=pickers,
+        select_all_button=select_all_button,
+        clear_button=clear_button,
+        run_button=run_button,
+        random_button=random_button,
+        random_count=random_count,
+        cancel_button=cancel_button,
+        view=view,
+        shared=shared,
+        merged=merged,
+        avoid=avoid,
+        status=status,
+        runs_state=gr.State([]),
     )
 
 
@@ -858,41 +1674,104 @@ def _build_result_section(gr) -> SimpleNamespace:
             elem_id="inferred-tags-editor",
             info="必要な場合だけ修正して、もう一度実行してください。",
         )
+    def prompt_box(number: int):
+        return gr.Textbox(
+            label=f"出力プロンプト {number}",
+            lines=4,
+            buttons=["copy"],
+            interactive=True,
+            visible=False,
+            elem_id=f"prompt-output-{number}",
+        )
+
+    # Boxes 2-4 come and go together: a task that answers with one list has no
+    # use for three empty boxes the height of the answer.
     prompts = []
-    for row_start in range(0, MAX_OUTPUT_VARIANTS, 2):
-        with gr.Row():
-            for index in range(row_start, row_start + 2):
-                prompts.append(
-                    gr.Textbox(
-                        label=f"出力プロンプト {index + 1}",
-                        lines=5,
-                        buttons=["copy"],
-                        interactive=True,
-                        elem_id=f"prompt-output-{index + 1}",
+    with gr.Row():
+        prompts.append(prompt_box(1))
+        prompts.append(prompt_box(2))
+    with gr.Row():
+        prompts.append(prompt_box(3))
+        prompts.append(prompt_box(4))
+    # The same groups the output is already organized into, one box each, so a
+    # prompt can be reused piecewise. Hidden until a run fills them, like the
+    # prompt boxes above.
+    parts: list = []
+    # The rows keep their gap even with every child hidden, so the whole block
+    # comes and goes rather than each box on its own.
+    with gr.Group(visible=False) as parts_box:
+        for row_start in range(0, len(PART_LABELS), 4):
+            with gr.Row():
+                for category, label in PART_LABELS[row_start : row_start + 4]:
+                    parts.append(
+                        gr.Textbox(
+                            label=label,
+                            lines=2,
+                            buttons=["copy"],
+                            interactive=True,
+                            visible=False,
+                            elem_id=f"prompt-part-{category}",
+                        )
                     )
-                )
+    # The pasteable pair comes first; the templated form is how the prose was
+    # written, which is reference material rather than something to paste.
+    prose_plain = gr.Textbox(
+        label="英文プロンプト（貼り付け用）",
+        lines=4,
+        buttons=["copy"],
+        interactive=True,
+        visible=False,
+        elem_id="prose-plain-output",
+        info="ラベルを外した本文です。そのまま画像モデルに貼り付けられます。",
+    )
+    prose_avoid = gr.Textbox(
+        label="除外（ネガティブプロンプト）",
+        lines=2,
+        buttons=["copy"],
+        interactive=True,
+        visible=False,
+        elem_id="prose-avoid-output",
+    )
     # Errors land here, so it must not be hidden inside a collapsed section.
     status = gr.Markdown(label="状態", elem_id="run-status")
     history_state = gr.State([])
-    with gr.Accordion("候補の採用・履歴", open=False):
+    return SimpleNamespace(
+        inferred_tags=inferred_tags,
+        prompts=prompts,
+        parts=parts,
+        prose_plain=prose_plain,
+        prose_avoid=prose_avoid,
+        parts_box=parts_box,
+        history_state=history_state,
+        status=status,
+    )
+
+
+def _build_run_details(gr) -> SimpleNamespace:
+    """Candidates, history, and the plan: everything about the run just made."""
+    with gr.Accordion("実行の詳細", open=False):
         with gr.Row():
             candidate_selector = gr.Radio(
                 choices=[],
                 label="生成候補",
             )
             adopt_button = gr.Button("選択候補を採用")
+        prose_prompt = gr.Textbox(
+            label="英文プロンプト（テンプレート形式）",
+            lines=6,
+            buttons=["copy"],
+            interactive=True,
+            elem_id="prose-prompt-output",
+            info="`Subject:` などのラベル付き。書き上がりの確認用です。",
+        )
         history_output = gr.JSON(label="実行履歴（新しい順・最大20件）")
-    with gr.Accordion("実行情報", open=False):
         action_plan = gr.JSON(label="実行計画")
     return SimpleNamespace(
-        inferred_tags=inferred_tags,
-        prompts=prompts,
-        history_state=history_state,
+        prose_prompt=prose_prompt,
         candidate_selector=candidate_selector,
         adopt_button=adopt_button,
         history_output=history_output,
         action_plan=action_plan,
-        status=status,
     )
 
 

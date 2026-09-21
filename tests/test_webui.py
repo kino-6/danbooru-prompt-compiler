@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import inspect
+import re
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from danbooru_prompt_compiler import webui
+from danbooru_prompt_compiler import web_service, webui
 from danbooru_prompt_compiler.web_service import (
     WEB_RUN_FIELDS,
     WebRunRequest,
@@ -258,6 +261,7 @@ from danbooru_prompt_compiler.tag_filter import (  # noqa: E402
     DEFAULT_EXCLUSION_TEXT,
     load_exclusion_text,
 )
+from danbooru_prompt_compiler.situation import load_situations  # noqa: E402
 from danbooru_prompt_compiler.webui import (  # noqa: E402
     accept_dropped_image,
     adopt_candidate,
@@ -286,7 +290,7 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
     assert description_props["interactive"] is True
     assert description_props["elem_id"] == "image-description-editor"
     action_values = {
-        value for _label, value in components["操作種別"]["props"]["choices"]
+        value for _label, value in components["やりたいこと"]["props"]["choices"]
     }
     assert action_values == {
         "auto",
@@ -295,13 +299,14 @@ def test_webui_exposes_human_correction_and_vision_controls() -> None:
         "edit",
         "next_panel",
         "scene_prompt",
+        "verify_tags",
     }
     assert components["VLMで画像を説明する"]["props"]["value"] is True
     assert components["プライベート画像URLを許可"]["props"]["value"] is False
     assert components["画像"]["props"]["interactive"] is True
     assert components["画像"]["props"]["sources"] == ["upload"]
     assert components["出力数"]["props"]["value"] == 4
-    change_props = components["次のコマの変化量"]["props"]
+    change_props = components["変わってよい範囲"]["props"]
     assert (change_props["minimum"], change_props["maximum"]) == (0.0, 1.0)
     assert change_props["value"] == 0.5
     assert _folded_ancestor_labels(app, "next-panel-change") == []
@@ -395,8 +400,11 @@ def test_secondary_webui_sections_are_folded() -> None:
     assert accordions["既存プロンプトから編集（任意）"] is False
     assert accordions["詳細設定"] is False
     assert accordions["画像タグの確認・修正"] is False
-    assert accordions["候補の採用・履歴"] is False
-    assert accordions["実行情報"] is False
+    # Candidates, history, and the run plan are all post-run inspection, so they
+    # sit behind one heading rather than three.
+    assert accordions["実行の詳細"] is False
+    assert "候補の採用・履歴" not in accordions
+    assert "実行情報" not in accordions
 
 
 def test_image_workspace_routes_dropped_urls_to_url_loader() -> None:
@@ -435,12 +443,17 @@ def test_run_inputs_follow_the_request_model_order() -> None:
     assert input_labels[WEB_RUN_FIELDS.index("instruction")] == "どうしたい？"
     assert input_labels[WEB_RUN_FIELDS.index("variants")] == "出力数"
     assert input_labels[WEB_RUN_FIELDS.index("edited_description")] == "画像の説明（VLM）"
-    assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "次のコマの変化量"
+    assert input_labels[WEB_RUN_FIELDS.index("next_panel_change")] == "変わってよい範囲"
+    assert input_labels[WEB_RUN_FIELDS.index("next_panel_time")] == "経過する時間"
     assert (
         input_labels[WEB_RUN_FIELDS.index("scene_template")]
         == "自然文プロンプトのテンプレート"
     )
     assert input_labels[WEB_RUN_FIELDS.index("scene_model")] == "自然文プロンプト用モデル"
+    assert (
+        input_labels[WEB_RUN_FIELDS.index("scene_sees_image")]
+        == "自然文プロンプトに画像を渡す"
+    )
     assert (
         input_labels[WEB_RUN_FIELDS.index("excluded_tags")]
         == "除外ワード（カンマ区切り、*使用可）"
@@ -559,11 +572,18 @@ def test_webui_has_cancel_dependencies_for_every_run_trigger() -> None:
         dependency["id"]
         for dependency in app.config["dependencies"]
         if dependency.get("api_name")
-        in {"run_prompt_workbench", "run_next_panel", "run_scene_prompt"}
+        in {
+            "run_prompt_workbench",
+            "run_next_panel",
+            "run_scene_prompt",
+            "run_situation_sweep",
+            "run_random_situations",
+        }
         or (dependency.get("targets") and dependency.get("trigger") == "submit")
     }
-    # 実行, 次のコマ, 自然文プロンプト, and instruction submit.
-    assert len(cancelled_ids) == 4
+    # 実行, 次のコマ, 自然文プロンプト, instruction submit, 選んだ分を生成,
+    # and おまかせ生成.
+    assert len(cancelled_ids) == 6
     assert run_ids <= cancelled_ids
 
 
@@ -624,5 +644,500 @@ def test_prompt_candidates_get_independent_copyable_boxes() -> None:
         props = components[f"出力プロンプト {index}"]["props"]
         assert "copy" in props["buttons"]
         assert props["interactive"] is True
-        assert props["visible"] is True
+        # Empty boxes are the tallest thing on an untouched page, so a box
+        # arrives with the run that fills it rather than waiting on screen.
+        assert props["visible"] is False
         assert props["elem_id"] == f"prompt-output-{index}"
+
+
+def test_diagnostics_cover_the_selected_vision_model() -> None:
+    checked: list[list[str]] = []
+
+    class Diagnostic:
+        message = "ok"
+
+    with mock.patch.object(
+        webui,
+        "check_ollama",
+        lambda _url, required: checked.append(required) or Diagnostic(),
+    ):
+        webui.diagnose_ollama(
+            "http://localhost:11434",
+            "qwen3:1.7b",
+            "qwen3:1.7b",
+            "unseen-gemma4:26b",
+            "gemma3:12b",
+            True,
+        )
+
+    # Whatever the dropdown ended up holding is what the run will ask for, so it
+    # is what the check has to report on.
+    assert checked == [["qwen3:1.7b", "qwen3:1.7b", "gemma3:12b", "unseen-gemma4:26b"]]
+
+
+def test_vision_model_offers_the_known_entries_and_still_takes_a_typed_name() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    vision = components["VLMモデル"]
+
+    assert vision["props"]["allow_custom_value"] is True
+    offered = [value for _label, value in vision["props"]["choices"]]
+    assert offered == ["qwen3-vl:8b", "unseen-gemma4:26b"]
+    labels = [label for label, _value in vision["props"]["choices"]]
+    assert any("無検閲" in label for label in labels)
+    assert any("既定" in label for label in labels)
+
+
+def test_every_task_choice_has_a_visibility_entry() -> None:
+    # A task with no entry would silently fall back to the auto layout and show
+    # controls its action cannot reach.
+    offered = {value for _label, value in webui.TASK_CHOICES}
+
+    assert offered == set(webui.TASK_FIELDS)
+    assert set(webui.TASK_FIELD_ORDER) == {
+        name for shown in webui.TASK_FIELDS.values() for name in shown
+    }
+
+
+def test_a_task_shows_only_what_its_action_can_reach() -> None:
+    def shown(task: str) -> set[str]:
+        return {
+            name
+            for name, visible in zip(
+                webui.TASK_FIELD_ORDER, webui.task_field_visibility(task)
+            )
+            if visible
+        }
+
+    # Tagging is pure ONNX, so nothing about models or instructions applies.
+    assert shown("tag_image") == {"run"}
+    # The prose task is the only one that can use the template or its settings.
+    assert {"scene_template", "scene_settings", "scene_prompt"} <= shown("scene_prompt")
+    assert "scene_template" not in shown("auto")
+    assert "scene_template" not in shown("next_panel")
+    # The review takes no instruction and returns one list, not variants.
+    assert "instruction" not in shown("verify_tags")
+    assert "variants" not in shown("verify_tags")
+    # The router can never choose the manual-only actions, so the auto layout
+    # must not offer their controls either.
+    assert "scene_prompt" not in shown("auto")
+
+
+def test_an_unknown_task_falls_back_to_the_auto_layout() -> None:
+    assert webui.task_field_visibility("nonsense") == webui.task_field_visibility("auto")
+
+
+def test_the_task_selector_sits_above_the_page_and_drives_visibility() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    selector = components["やりたいこと"]
+
+    assert selector["props"]["value"] == "auto"
+    # One dependency updates exactly the toggled groups when the task changes.
+    toggling = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if any(
+            target == (selector["id"], "change")
+            for target in dependency.get("targets") or []
+        )
+    ]
+    assert len(toggling) == 1
+    # At least one per field name, and more where a name owns several components.
+    assert len(toggling[0]["outputs"]) >= len(webui.TASK_FIELD_ORDER)
+
+
+def test_controls_the_default_task_cannot_use_start_hidden() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    # The first render has to agree with the auto layout, or the page opens
+    # showing controls that the selector would immediately take away.
+    assert components["自然文プロンプトのテンプレート"]["props"]["visible"] is False
+    assert components["自然文プロンプト用モデル"]["props"]["visible"] is not False
+    assert components["どうしたい？"]["props"]["visible"] is not False
+
+
+def test_every_model_field_is_a_dropdown_that_still_takes_a_typed_name() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    labels = [
+        "指示ルーターモデル",
+        "プロンプト生成モデル",
+        "自然文プロンプト用モデル",
+        "VLMモデル",
+    ]
+
+    for label in labels:
+        props = components[label]["props"]
+        # A model name is a thing you pick, not a thing you spell from memory -
+        # but any other pulled model has to remain reachable.
+        assert props["allow_custom_value"] is True, label
+        assert props["choices"], label
+
+    text_models = [
+        value for _label, value in components["プロンプト生成モデル"]["props"]["choices"]
+    ]
+    assert text_models == ["qwen3:1.7b", "qwen3:8b", "unseen-gemma4:26b"]
+    assert (
+        components["指示ルーターモデル"]["props"]["choices"]
+        == components["プロンプト生成モデル"]["props"]["choices"]
+    )
+
+
+def test_the_prose_model_can_defer_to_the_prompt_generation_model() -> None:
+    app = build_app()
+    choices = _components_by_label(app)["自然文プロンプト用モデル"]["props"]["choices"]
+
+    # The empty value is the documented "reuse the compiler model" case, so it
+    # needs a name in the list rather than an empty box the reader must guess at.
+    assert choices[0] == ("プロンプト生成モデルと同じ", "")
+    assert [value for _label, value in choices[1:]] == [
+        "qwen3:1.7b",
+        "qwen3:8b",
+        "unseen-gemma4:26b",
+    ]
+
+
+def test_a_prompt_splits_into_the_groups_it_is_already_printed_in() -> None:
+    grouped = (
+        "===\n"
+        "1girl, solo\n"
+        "long_hair\n"
+        "school_uniform\n"
+        "standing, looking_at_viewer\n"
+        "shrine, rain, night\n"
+        "===\n"
+        "\n"
+        "subject: 1girl, solo\n"
+        "appearance: long_hair\n"
+        "clothing: school_uniform\n"
+        "pose: standing, looking_at_viewer\n"
+        "scene: shrine, rain, night"
+    )
+
+    parts = webui.prompt_parts(grouped)
+
+    assert parts["subject"] == "1girl, solo"
+    assert parts["clothing"] == "school_uniform"
+    assert parts["scene"] == "shrine, rain, night"
+    # The block and its labelled copy describe one prompt, not two.
+    assert parts["pose"] == "standing, looking_at_viewer"
+
+
+def test_a_variant_heading_is_not_mistaken_for_a_tag() -> None:
+    parts = webui.prompt_parts("[variant 2]\n===\n1girl, solo\nshrine\n===")
+
+    assert parts["subject"] == "1girl, solo"
+    assert "variant" not in ", ".join(parts.values())
+
+
+def test_a_flat_prompt_splits_just_as_well_and_an_empty_one_gives_nothing() -> None:
+    assert webui.prompt_parts("1girl, solo, shrine, rain")["scene"] == "shrine, rain"
+    assert webui.prompt_parts("") == {}
+
+
+def test_the_part_boxes_are_copyable_and_wait_for_a_run() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    for _category, label in webui.PART_LABELS:
+        props = components[label]["props"]
+        assert "copy" in props["buttons"], label
+        # Eight empty boxes on an untouched page would undo the layout work.
+        assert props["visible"] is False, label
+
+
+def test_the_first_prompt_box_drives_the_part_boxes() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+    box_id = components["出力プロンプト 1"]["id"]
+
+    splitting = [
+        dependency
+        for dependency in app.config["dependencies"]
+        if any(target == (box_id, "change") for target in dependency.get("targets") or [])
+    ]
+
+    assert len(splitting) == 1
+    # One update per box, plus the block that holds them all.
+    assert len(splitting[0]["outputs"]) == len(webui.PART_LABELS) + 1
+
+
+def test_the_prose_arrives_ready_to_paste_with_its_negative_beside_it() -> None:
+    app = build_app()
+    components = _components_by_label(app)
+
+    for label in ("英文プロンプト（貼り付け用）", "除外（ネガティブプロンプト）"):
+        props = components[label]["props"]
+        assert "copy" in props["buttons"], label
+        # Boxes of their own, not one of the four: tags and prose are two
+        # readings of one result rather than two results sharing a slot.
+        assert props["visible"] is False, label
+
+    # The labelled form is how the prose was written, not something to paste,
+    # so it sits behind the collapsed panel rather than on the page.
+    assert components["英文プロンプト（テンプレート形式）"]["props"]["visible"] is not False
+    assert components["英文プロンプトも出す"]["props"]["value"] is True
+
+
+def test_every_progress_handler_is_one_gradio_actually_wires_up() -> None:
+    """A progress parameter Gradio does not see is a silent dead end.
+
+    gradio.helpers.special_args reads the signature from the left and stops at
+    the first non-positional parameter, so `*values, progress=gr.Progress()`
+    yields no progress index: the handler receives an unwired Progress, every
+    report vanishes, and the page shows only Gradio's own "processing | 47.2s".
+    """
+    from gradio.helpers import special_args
+
+    app = build_app()
+    handlers = [
+        block_fn.fn
+        for block_fn in app.fns.values()
+        if block_fn.fn is not None
+        and any(
+            isinstance(parameter.default, gradio.Progress)
+            for parameter in inspect.signature(block_fn.fn).parameters.values()
+        )
+    ]
+
+    assert handlers, "no handler asks for progress at all"
+    for handler in handlers:
+        assert special_args(handler)[1] is not None, (
+            f"{handler.__name__} takes a Progress that gradio will not wire up"
+        )
+
+
+def test_the_progress_stages_the_service_reports_all_have_labels() -> None:
+    reported = set(
+        re.findall(
+            r'_report_progress\(\s*on_progress,\s*"([a-z_]+)"',
+            Path(web_service.__file__).read_text(encoding="utf-8"),
+        )
+    )
+
+    assert reported, "no progress reports found in the service"
+    assert reported <= set(webui.PROGRESS_LABELS)
+
+
+def _situation_pickers(app) -> list[dict]:
+    return [
+        component
+        for component in app.config["components"]
+        if str(component["props"].get("elem_id", "")).startswith("situation-picker-")
+    ]
+
+
+def test_the_situation_tab_offers_every_situation_grouped_by_category() -> None:
+    app = build_app()
+    pickers = _situation_pickers(app)
+    situations = load_situations()
+    offered = {
+        value for picker in pickers for _label, value in picker["props"]["choices"]
+    }
+
+    # Checkbox groups, not a dropdown: the point of the tab is asking for
+    # several at once, and one group per category rather than one list of
+    # forty-odd.
+    assert all(picker["type"] == "checkboxgroup" for picker in pickers)
+    assert len(pickers) == len({item.category for item in situations})
+    assert offered == {item.name for item in situations}
+    assert all(picker["props"]["value"] == [] for picker in pickers)
+
+
+def test_each_category_group_is_named_after_its_category() -> None:
+    app = build_app()
+    named = {picker["props"]["label"] for picker in _situation_pickers(app)}
+
+    assert named == {item.category for item in load_situations()}
+
+
+def test_the_situation_tab_answers_in_one_text_rather_than_many_boxes() -> None:
+    """Forty-six boxes is not a result anyone reads, it is a haystack."""
+    app = build_app()
+    per_situation = [
+        component
+        for component in app.config["components"]
+        if str(component["props"].get("elem_id", "")).startswith("situation-output-")
+    ]
+    merged = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-merged"
+    )
+
+    assert per_situation == []
+    assert merged["props"]["visible"] is False
+
+
+def test_the_situation_template_only_appears_for_prose() -> None:
+    app = build_app()
+    template = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-template"
+    )
+
+    # Tags are the default, and a prose template means nothing to them.
+    assert template["props"]["visible"] is False
+
+
+def test_the_situation_progress_is_drawn_on_something_that_is_visible() -> None:
+    """The first run happens with every output box still hidden.
+
+    Left to Gradio's own choice the progress rendered at the foot of the page -
+    measured at top=1143px in a 1100px viewport - so the first run appeared to
+    report nothing, while later runs drew onto the by-then-visible boxes.
+    """
+    app = build_app()
+    dependency = next(
+        item
+        for item in app.config["dependencies"]
+        if item.get("api_name") == "run_situation_sweep"
+    )
+    status_id = next(
+        component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-status"
+    )
+
+    assert dependency["show_progress_on"] == [status_id]
+
+
+def test_the_situation_tab_is_named_for_what_it_produces() -> None:
+    """It generates a prompt per situation; reading them side by side is an aid.
+
+    Named 比較 it described the smaller half of itself, and the default view
+    followed the name: boxes holding only the lines that differ, which are not
+    prompts anyone can paste.
+    """
+    app = build_app()
+    tab = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-tab"
+    )
+    view = next(
+        component
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-view"
+    )
+
+    assert "生成" in tab["props"]["label"]
+    assert "比較" not in tab["props"]["label"]
+    assert view["props"]["value"] == webui.SHARED_FIRST_VIEW
+    assert view["props"]["choices"][0] == ("共通をまとめる", webui.SHARED_FIRST_VIEW)
+
+
+def test_the_random_run_fills_the_controls_before_it_runs() -> None:
+    """A run whose inputs cannot be seen cannot be adjusted and run again.
+
+    So おまかせ writes its picks back into the subject box and the category
+    groups, then runs on them - two events chained rather than one that keeps
+    its choices to itself.
+    """
+    app = build_app()
+    dependencies = app.config["dependencies"]
+    randomize = next(
+        item
+        for item in dependencies
+        if any(
+            component["props"].get("elem_id") == "situation-random"
+            for component in app.config["components"]
+            if component["id"] in [target[0] for target in item.get("targets", [])]
+        )
+        and item.get("api_name") is not False
+    )
+    subject_id = next(
+        component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id") == "situation-subject"
+    )
+    picker_ids = {
+        component["id"]
+        for component in app.config["components"]
+        if str(component["props"].get("elem_id", "")).startswith("situation-picker-")
+    }
+
+    assert subject_id in randomize["outputs"]
+    assert picker_ids <= set(randomize["outputs"])
+
+
+def test_the_random_run_reaches_the_service_the_same_way_the_manual_one_does() -> None:
+    app = build_app()
+    by_name = {
+        item.get("api_name"): item
+        for item in app.config["dependencies"]
+        if item.get("api_name")
+    }
+
+    # Same controls, in the same order: the random path only prepends its own
+    # count and prepends the controls it writes back to. Two lists kept in step
+    # by hand would drift the first time a setting was added to one of them.
+    manual, random_run = by_name["run_situation_sweep"], by_name["run_random_situations"]
+
+    assert random_run["inputs"][1:] == manual["inputs"]
+    assert random_run["outputs"][-len(manual["outputs"]) :] == manual["outputs"]
+
+
+def _layout_parent(node, wanted, parent=None):
+    """The id of the container the wanted component sits directly inside."""
+    if node.get("id") == wanted:
+        return parent
+    for child in node.get("children", []):
+        found = _layout_parent(child, wanted, node.get("id"))
+        if found is not None:
+            return found
+    return None
+
+
+def test_the_situation_status_sits_with_the_buttons_that_drive_it() -> None:
+    """A button that changes nothing near itself reads as a button that does nothing.
+
+    The progress is drawn on the status line, so it has to be in the column the
+    buttons are in. Moved across to the results it sat 308px away and above the
+    button that starts the run, and pressing おまかせ生成 changed nothing
+    anywhere the presser was looking.
+    """
+    app = build_app()
+    ids = {
+        component["props"].get("elem_id"): component["id"]
+        for component in app.config["components"]
+        if component["props"].get("elem_id")
+    }
+    layout = app.config["layout"]
+
+    # The run button is inside a row; the status is a sibling of that row.
+    button_row = _layout_parent(layout, ids["situation-random"])
+    assert _layout_parent(layout, ids["situation-status"]) == _layout_parent(
+        layout, button_row
+    )
+    # And not with the answers.
+    assert _layout_parent(layout, ids["situation-status"]) != _layout_parent(
+        layout, ids["situation-merged"]
+    )
+
+
+def test_a_sweep_that_ran_on_the_cpu_says_so_once() -> None:
+    """A sweep keeps only the prompts, so a note in a status it throws away
+    would never be seen - and a run four times slower for staying off the card
+    needs to say why."""
+    runs = [
+        webui.SituationRun("battle", "戦闘", "holding_weapon", gpu_note="CPUで実行しました。"),
+        webui.SituationRun("rest", "休息", "sitting", gpu_note="CPUで実行しました。"),
+    ]
+
+    _avoid, summary = webui._situation_summary(gradio, runs)
+
+    # Once for the sweep, not once per run: same card, same decision.
+    assert summary.count("CPUで実行しました。") == 1
+    assert "2件を生成しました。" in summary
+
+
+def test_a_sweep_on_a_free_card_says_nothing_about_it() -> None:
+    runs = [webui.SituationRun("battle", "戦闘", "holding_weapon")]
+
+    _avoid, summary = webui._situation_summary(gradio, runs)
+
+    assert summary.strip() == "1件を生成しました。"

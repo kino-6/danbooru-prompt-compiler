@@ -1,0 +1,290 @@
+# Ingredients for a random subject. Every tag here is checked against the
+# Danbooru dictionary by the test suite; one it has never heard of is
+# dropped downstream without a word.
+slots:
+- name: who
+  label: 人物
+  options:
+  - prose: an elf woman
+    tags:
+    - 1girl
+    - solo
+    - elf
+    - pointy_ears
+  - prose: a catgirl
+    tags:
+    - 1girl
+    - solo
+    - animal_ears
+    - cat_ears
+    - cat_tail
+  - prose: a witch
+    tags:
+    - 1girl
+    - solo
+    - witch
+    - witch_hat
+  - prose: a woman knight
+    tags:
+    - 1girl
+    - solo
+    - knight
+  - prose: a woman android
+    tags:
+    - 1girl
+    - solo
+    - android
+    - robot_joints
+  - prose: a swordswoman
+    tags:
+    - 1girl
+    - solo
+    - sword
+  - prose: a woman scholar
+    tags:
+    - 1girl
+    - solo
+    - glasses
+  - prose: a shrine maiden
+    tags:
+    - 1girl
+    - solo
+    - miko
+  - prose: a woman dancer
+    tags:
+    - 1girl
+    - solo
+    - dancer
+  - prose: a woman mechanic
+    tags:
+    - 1girl
+    - solo
+    - goggles
+  - prose: a nun
+    tags:
+    - 1girl
+    - solo
+    - nun
+  - prose: a woman samurai
+    tags:
+    - 1girl
+    - solo
+    - samurai
+  - prose: a woman ninja
+    tags:
+    - 1girl
+    - solo
+    - ninja
+  - prose: a mermaid
+    tags:
+    - 1girl
+    - solo
+    - mermaid
+  - prose: a winged girl
+    tags:
+    - 1girl
+    - solo
+    - wings
+  - prose: a horned girl
+    tags:
+    - 1girl
+    - solo
+    - horns
+  - prose: a woman vampire
+    tags:
+    - 1girl
+    - solo
+    - vampire
+  - prose: a young man
+    tags:
+    - 1boy
+    - solo
+  - prose: a boy with a sword
+    tags:
+    - 1boy
+    - solo
+    - sword
+  - prose: a masked woman
+    tags:
+    - 1girl
+    - solo
+    - mask
+- name: hair
+  label: 髪
+  lead: with
+  options:
+  - prose: long silver hair
+    tags:
+    - grey_hair
+    - long_hair
+  - prose: short black hair
+    tags:
+    - black_hair
+    - short_hair
+  - prose: blonde twintails
+    tags:
+    - blonde_hair
+    - twintails
+  - prose: a red ponytail
+    tags:
+    - red_hair
+    - ponytail
+  - prose: a long blue braid
+    tags:
+    - blue_hair
+    - braid
+    - long_hair
+  - prose: messy brown hair
+    tags:
+    - brown_hair
+    - messy_hair
+  - prose: pink hair in a bob
+    tags:
+    - pink_hair
+    - bob_cut
+  - prose: long white hair
+    tags:
+    - white_hair
+    - long_hair
+  - prose: curly green hair
+    tags:
+    - green_hair
+    - curly_hair
+  - prose: straight purple hair
+    tags:
+    - purple_hair
+    - long_hair
+  - prose: a black hime cut
+    tags:
+    - black_hair
+    - hime_cut
+  - prose: cropped grey hair
+    tags:
+    - grey_hair
+    - short_hair
+- name: eyes
+  label: 瞳
+  lead: and
+  options:
+  - prose: blue eyes
+    tags:
+    - blue_eyes
+  - prose: red eyes
+    tags:
+    - red_eyes
+  - prose: green eyes
+    tags:
+    - green_eyes
+  - prose: yellow eyes
+    tags:
+    - yellow_eyes
+  - prose: orange eyes
+    tags:
+    - orange_eyes
+  - prose: mismatched eyes
+    tags:
+    - heterochromia
+- name: outfit
+  label: 服装
+  lead: in
+  options:
+  - prose: worn leather armour
+    tags:
+    - leather_armor
+  - prose: dented plate armour
+    tags:
+    - plate_armor
+    - armor
+  - prose: a hooded cloak
+    tags:
+    - cloak
+    - hood
+  - prose: a long coat
+    tags:
+    - coat
+  - prose: a school uniform
+    tags:
+    - school_uniform
+  - prose: a kimono
+    tags:
+    - kimono
+  - prose: a yukata
+    tags:
+    - yukata
+  - prose: a maid outfit
+    tags:
+    - maid
+  - prose: an oversized hoodie
+    tags:
+    - hoodie
+  - prose: stained overalls
+    tags:
+    - overalls
+  - prose: a plain robe
+    tags:
+    - robe
+  - prose: a knitted sweater
+    tags:
+    - sweater
+  - prose: a battered trench coat
+    tags:
+    - trench_coat
+  - prose: a simple dress
+    tags:
+    - dress
+  - prose: a bodysuit
+    tags:
+    - bodysuit
+  - prose: a work apron
+    tags:
+    - apron
+- name: prop
+  label: 持ち物
+  lead: carrying
+  options:
+  - prose: a longbow
+    tags:
+    - bow_(weapon)
+    - holding_bow_(weapon)
+  - prose: a drawn sword
+    tags:
+    - holding_sword
+  - prose: a tall staff
+    tags:
+    - staff
+    - holding_staff
+  - prose: an open book
+    tags:
+    - book
+    - holding_book
+  - prose: a lit lantern
+    tags:
+    - lantern
+    - holding_lantern
+  - prose: a heavy backpack
+    tags:
+    - backpack
+  - prose: a folded umbrella
+    tags:
+    - umbrella
+    - holding_umbrella
+  - prose: a katana
+    tags:
+    - katana
+  - prose: a spear
+    tags:
+    - spear
+  - prose: a scythe
+    tags:
+    - scythe
+  - prose: a small wand
+    tags:
+    - wand
+  - prose: a grimoire
+    tags:
+    - grimoire
+  - prose: a bundle of pouches
+    tags:
+    - pouch
+  - prose: nothing at all
+    tags: []

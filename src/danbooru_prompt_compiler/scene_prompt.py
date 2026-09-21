@@ -21,6 +21,13 @@ AVOID_SECTION = "Avoid"
 DELIVERY_SECTION = "Delivery"
 SECTION_PATTERN = re.compile(r"^\s*[-*]?\s*\**([A-Za-z][A-Za-z /]*?)\**\s*[:：]\s*(.+?)\s*$")
 FENCE_PATTERN = re.compile(r"^\s*```.*$")
+QUALIFIER_PATTERN = re.compile(r"_\([^)]*\)")
+# A short label followed by a colon, at the start of a fragment or right
+# after a separator. Bounded to a few words so a colon inside real prose is
+# left alone, and letters-only so a ratio like 16:9 survives.
+INLINE_LABEL_PATTERN = re.compile(
+    r"(?:(?<=^)|(?<=[,;.]\s)|(?<=[,;.]))\s*[A-Za-z][A-Za-z/\- ]{0,28}?\s*:\s*"
+)
 
 
 @dataclass(frozen=True)
@@ -64,16 +71,34 @@ def build_scene_prompt(
     instruction: str,
     base_prompt: str,
     avoid_terms: list[str],
+    situation_guidance: str = "",
+    sees_image: bool = False,
 ) -> str:
-    """The request handed to the text model, one section per template slot."""
+    """The request handed to the model, one section per template slot.
+
+    ``sees_image`` says the reference image travels with the request. A vision
+    model writes the richer paragraph from the picture, but it reads the picture
+    as a whole and lets discrete features go: asked to describe the sample
+    portrait it dropped ``pointy_ears`` and ``elf``, which the tagger had scored
+    at 0.92. So the tags are named as observed facts either way, and the model is
+    told to account for all of them.
+    """
+    # Never in the answer's own shape. Written as `Section: guidance` the list
+    # is a set of valid-looking answers, and copying one back is the easiest
+    # thing a small model can do - which is how "identity, apparent age, hair
+    # colour and style, eye colour, build" kept arriving as a subject.
     section_lines = [
-        f"{name}: {guidance}" for name, guidance in template.sections
+        f"- {name} -> cover {guidance}" for name, guidance in template.sections
     ]
+    observed = ", ".join(humanize_tags(image_tags))
     known = [
-        _labelled("Danbooru tags of the reference image", ", ".join(image_tags)),
+        _labelled("Observed in the reference image", observed),
         _labelled("Description of the reference image", image_description),
         _labelled("Existing prompt", base_prompt),
         _labelled("User request", instruction),
+        # Last of the known material, because it is the weakest claim on the
+        # scene: it says what is happening, never who it happens to.
+        _situation_request(situation_guidance),
     ]
     return "\n".join(
         part
@@ -82,17 +107,26 @@ def build_scene_prompt(
             "You write prompts for a natural-language image model.",
             template.task,
             "",
+            "The reference image is attached. Write from what you can see in it."
+            if sees_image
+            else None,
             "Fill in every section below on its own line, in this exact order, "
             "using the format `Section: content`.",
             "Write plain English sentence fragments, not tag lists, and describe "
             "only what should be visible in the image.",
+            "Each section covers its own aspect and nothing else. Never repeat "
+            "in one section what another section has already said.",
             "Base every section on the reference material; do not invent a "
             "different character, setting, or outfit.",
             "Do not add sections, headings, numbering, markdown, or commentary.",
             "",
+            "Sections to fill in, in this order. The words after the arrow say "
+            "what each one has to cover; they are not an answer and must never "
+            "be written back.",
             *section_lines,
             "",
             *[part for part in known if part],
+            _observed_request(observed),
             "",
             _avoid_request(avoid_terms),
         )
@@ -105,6 +139,7 @@ def render_scene_prompt(
     template: SceneTemplate,
     *,
     avoid_terms: list[str],
+    situation_guidance: str = "",
 ) -> str:
     """Force the model's answer back into the template's shape.
 
@@ -113,9 +148,11 @@ def render_scene_prompt(
     """
     filled = _parse_sections(raw_output)
     lines = [template.task, ""]
-    for name in template.section_names:
-        value = filled.get(name.lower())
-        if value:
+    for name, guidance in template.sections:
+        value = _without_echoed_guidance(filled.get(name.lower()), situation_guidance)
+        # A section answered with its own guidance is not answered. Dropping it
+        # leaves an honest gap rather than printing the question as the answer.
+        if value and not _is_echo(value, guidance):
             lines.append(f"{name}: {value}")
     if len(lines) == 2:
         # Nothing parsed: keep the model's own words rather than an empty shell.
@@ -128,6 +165,102 @@ def render_scene_prompt(
     return "\n".join(lines).strip()
 
 
+def flatten_scene_prompt(rendered: str) -> str:
+    """The template's contents with the scaffolding gone, one section per line.
+
+    `Subject:` and the rest are scaffolding for writing the prompt, not part of
+    it: an image model reads them as words. The task line and `Delivery` address
+    the model about the deliverable rather than describing the picture, and
+    `Avoid` belongs in a negative prompt, so all three stay behind in the
+    full version.
+
+    The line breaks stay. Run into one paragraph the result is still a valid
+    prompt, but the sections can no longer be told apart, and telling them apart
+    is what makes the output worth editing afterwards.
+    """
+    fragments: list[str] = []
+    for line in (rendered or "").splitlines():
+        match = SECTION_PATTERN.match(line)
+        if not match:
+            continue
+        name, value = match.group(1).strip(), match.group(2).strip()
+        if name in {DELIVERY_SECTION, AVOID_SECTION}:
+            continue
+        fragment = _strip_inline_labels(value).rstrip(" .,;")
+        if fragment:
+            fragments.append(fragment)
+    return "\n".join(f"{fragment}." for fragment in _drop_repeats(fragments))
+
+
+def _drop_repeats(fragments: list[str]) -> list[str]:
+    """Say each thing once.
+
+    A small model fills every section with the whole picture rather than its own
+    aspect, so seven sections come back as the same sentence seven times and the
+    pasteable prose is mostly repetition. Clauses already said are dropped, and
+    a section left with nothing to add goes with them.
+    """
+    kept: list[str] = []
+    seen: set[str] = set()
+    for fragment in fragments:
+        clauses: list[str] = []
+        for clause in fragment.split(","):
+            clause = clause.strip()
+            key = clause.lower().rstrip(".")
+            if not clause or key in seen:
+                continue
+            seen.add(key)
+            clauses.append(clause)
+        if clauses:
+            kept.append(", ".join(clauses))
+    return kept
+
+
+def _strip_inline_labels(value: str) -> str:
+    """Drop the sub-headings a model writes inside a section it is filling in.
+
+    The template's guidance is a list of what to cover - `outfit, layers,
+    accessories` - and the model often answers by repeating each word as a
+    label: `Outfit: white kosode, layers: two, accessories: none`. Stripping the
+    section name alone leaves those behind, which is exactly the noise the
+    stripping was for.
+    """
+    cleaned = INLINE_LABEL_PATTERN.sub("", value)
+    # The match reaches back over the separator's space to take the label with
+    # it, so the spacing is put back rather than left as `a miko,young adult`.
+    cleaned = re.sub(r"\s*([,;])\s*", r"\1 ", cleaned)
+    return re.sub(r"\s{2,}", " ", cleaned).strip(" ,;")
+
+
+def scene_avoid_line(rendered: str) -> str:
+    """The avoid terms on their own, for the negative prompt box they belong in.
+
+    Every image model takes these separately from the description, so leaving
+    them inside the paragraph makes the paragraph wrong.
+    """
+    for line in (rendered or "").splitlines():
+        match = SECTION_PATTERN.match(line)
+        if match and match.group(1).strip() == AVOID_SECTION:
+            return match.group(2).strip()
+    return ""
+
+
+def humanize_tags(tags: list[str]) -> list[str]:
+    """Danbooru tags as words a prose model can use.
+
+    A qualifier only means something inside the dictionary - ``bow_(weapon)``
+    separates the weapon from the ribbon - and a prose model writes the
+    parenthesis straight into the paragraph. It is dropped, and the rest of the
+    reference material is left to disambiguate.
+    """
+    humanized: list[str] = []
+    for tag in tags:
+        cleaned = QUALIFIER_PATTERN.sub("", tag).replace("_", " ").strip()
+        if cleaned and cleaned not in humanized:
+            humanized.append(cleaned)
+    return humanized
+
+
 def humanize_avoid_terms(terms: list[str]) -> list[str]:
     """Tag-shaped exclusion words as words a prose model understands."""
     humanized: list[str] = []
@@ -136,6 +269,79 @@ def humanize_avoid_terms(terms: list[str]) -> list[str]:
         if cleaned and cleaned not in humanized:
             humanized.append(cleaned)
     return humanized
+
+
+# A phrase has to be this long before removing it counts as removing an echo
+# rather than removing ordinary English.
+ECHO_PHRASE_WORDS = 3
+
+
+def _guidance_phrases(guidance: str) -> list[str]:
+    """The direction broken into the pieces a model copies it in.
+
+    It is copied clause by clause, not whole, so whole-string comparison never
+    catches it: "off duty and unguarded, sitting or lying down, weight let go"
+    is three of these in a row inside a sentence of the model's own.
+    """
+    phrases = []
+    for piece in re.split(r"[,;:.]", guidance or ""):
+        piece = " ".join(piece.split()).strip()
+        if len(piece.split()) >= ECHO_PHRASE_WORDS:
+            phrases.append(piece)
+    # Longest first, so a phrase inside another phrase cannot strand its tail.
+    return sorted(phrases, key=len, reverse=True)
+
+
+def _without_echoed_guidance(value: str | None, guidance: str) -> str:
+    """A section with the direction's own wording taken back out.
+
+    Asking the model not to copy the direction works most of the time, which is
+    not good enough: the same sweep produced "A silver-haired elf with a bow."
+    on one run and that same subject followed by the entire direction on the
+    next. Removal is done here so the answer does not depend on the dice.
+    """
+    value = (value or "").strip()
+    if not value or not guidance:
+        return value
+    stripped = value
+    for phrase in _guidance_phrases(guidance):
+        stripped = re.sub(re.escape(phrase), "", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*([,;])\s*(?=[,;.])", "", stripped)
+    stripped = re.sub(r"\s{2,}", " ", stripped).strip(" ,;")
+    stripped = re.sub(r"\s+([,;.])", r"", stripped)
+    if stripped and not stripped.endswith("."):
+        stripped += "."
+    # A section that was nothing but the direction has no answer left in it, and
+    # the model's words are better than a fragment of them.
+    return stripped if len(stripped.split()) >= ECHO_PHRASE_WORDS else value
+
+
+def _situation_request(guidance: str) -> str:
+    """The situation, named as a direction rather than as words to reuse.
+
+    Written as a plain labelled value it came straight back: asked for a
+    resting elf the model answered "off duty and unguarded, sitting or lying
+    down, weight let go, gear set aside, a drink or a book to hand" - the
+    direction itself, alternatives and all, instead of one picture of it. So it
+    is introduced the way the template sections are, as something to realise.
+    """
+    guidance = (guidance or "").strip()
+    if not guidance:
+        return ""
+    return (
+        "Situation to depict. This is a direction, not wording to reuse: choose "
+        "one concrete version of it - one posture, one place, one thing in hand "
+        "- and describe that. Never write these words back.\n" + guidance
+    )
+
+
+def _is_echo(value: str, guidance: str) -> bool:
+    """Whether a section came back as the words that asked for it."""
+    return _normalized(value) == _normalized(guidance)
+
+
+def _normalized(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
 def _read_template(path: Path) -> SceneTemplate | None:
@@ -162,6 +368,15 @@ def _read_template(path: Path) -> SceneTemplate | None:
 def _labelled(label: str, value: str) -> str:
     value = (value or "").strip()
     return f"{label}: {value}" if value else ""
+
+
+def _observed_request(observed: str) -> str:
+    if not observed:
+        return ""
+    return (
+        "Every term listed as observed was detected in the reference image. "
+        "Treat them as facts and account for all of them across the sections."
+    )
 
 
 def _avoid_request(avoid_terms: list[str]) -> str:

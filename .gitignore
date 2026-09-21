@@ -211,6 +211,7 @@ data/subsets/
 
 # Web UI exclusion words saved from the browser
 data/excluded_tags.json
+data/webui_settings.json
 
 # PyPI configuration file
 .pypirc

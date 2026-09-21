@@ -36,6 +36,9 @@ class CompileRequest(BaseModel):
     tag_subset: list[str] = Field(default_factory=list)
     max_output_tags: int = Field(default=20, ge=1, le=100)
     excluded_tags: list[str] = Field(default_factory=list)
+    # What kind of moment this is. Guidance rather than scene: written into
+    # the scene description it replaced the subject instead of moving it.
+    situation_guidance: str = ""
     temperature: float | None = None
 
 

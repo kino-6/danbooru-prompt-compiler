@@ -63,7 +63,9 @@ def test_second_image_replaces_loaded_image(tmp_path) -> None:
             expect(image_description).to_have_value("")
             expect(base_prompt).to_have_value("")
             for index in range(1, 5):
-                expect(page.locator(f"#prompt-output-{index} textarea")).to_have_value("")
+                # Clearing the page takes the boxes away rather than leaving
+                # four empty ones behind.
+                expect(page.locator(f"#prompt-output-{index}")).to_be_hidden()
 
             page.get_by_role("button", name="実行", exact=True).click()
             expect(inferred_tags).to_have_value("1girl, solo")
@@ -100,10 +102,8 @@ def test_three_prompt_variants_are_visible_editable_and_copy_ready(tmp_path) -> 
                 expect(output).to_have_value(prompt)
                 expect(container.get_by_role("button", name="Copy")).to_be_visible()
 
-            fourth = page.locator("#prompt-output-4 textarea")
-            expect(fourth).to_be_visible()
-            expect(fourth).to_be_editable()
-            expect(fourth).to_have_value("")
+            # Three variants leave three boxes; the fourth never appears.
+            expect(page.locator("#prompt-output-4")).to_be_hidden()
             browser.close()
 
 
@@ -164,7 +164,11 @@ def test_scene_prompt_button_runs_with_the_selected_template(tmp_path) -> None:
             page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
             expect(page.locator('#image-workspace img[src*="scene.png"]')).to_be_visible()
 
-            # Both the template picker and the trigger sit in the main controls.
+            # The template picker and the trigger are hidden until the task asks
+            # for them, so picking the task is the first step of the flow now.
+            page.locator("#task-selector").get_by_text("自然文プロンプト", exact=True).click()
+            expect(page.locator("#scene-template")).to_be_visible()
+
             page.locator("#scene-template input").click()
             page.locator("#scene-template li", has_text="絵コンテ／次のコマ").first.click()
             page.get_by_role("button", name="自然文プロンプト", exact=True).click()
@@ -272,7 +276,7 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
                     "drop",
                     {"dataTransfer": data_transfer},
                 )
-                page.get_by_text("実行情報", exact=True).click()
+                page.get_by_text("実行の詳細", exact=True).click()
                 expect(page.get_by_text("URL画像を読み込みました。", exact=True)).to_be_visible()
                 page.get_by_role("button", name="実行", exact=True).click()
                 page.get_by_text("画像タグの確認・修正", exact=True).click()
@@ -284,3 +288,83 @@ def test_remote_image_url_can_be_dropped_on_image_workspace(tmp_path) -> None:
     finally:
         image_server.shutdown()
         image_server.server_close()
+
+
+DROP_FILE_JS = """
+([b64, name]) => {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([bytes], name, {type: "image/png"}));
+  const target = document.querySelector("#image-workspace");
+  for (const type of ["dragenter", "dragover", "drop"]) {
+    target.dispatchEvent(
+      new DragEvent(type, {dataTransfer: transfer, bubbles: true, cancelable: true})
+    );
+  }
+}
+"""
+
+
+def test_dropping_a_file_replaces_an_already_loaded_image(tmp_path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (4, 4), "red").save(first)
+    Image.new("RGB", (4, 4), "blue").save(second)
+
+    with running_test_webui() as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_function(
+                "document.documentElement.dataset.imageUrlDropReady === 'true'"
+            )
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(first))
+            expect(page.locator('#image-workspace img[src*="first.png"]')).to_be_visible()
+
+            # Gradio's own dropzone is gone once an image is loaded, so a dropped
+            # file used to be swallowed and the workspace left as it was.
+            page.evaluate(
+                DROP_FILE_JS,
+                [base64.b64encode(second.read_bytes()).decode("ascii"), "second.png"],
+            )
+
+            expect(page.locator('#image-workspace img[src*="second.png"]')).to_be_visible()
+            expect(page.locator('#image-workspace img[src*="first.png"]')).to_have_count(0)
+            browser.close()
+
+
+def test_an_empty_workspace_is_left_to_gradios_own_dropzone(tmp_path) -> None:
+    image = tmp_path / "only.png"
+    Image.new("RGB", (4, 4), "purple").save(image)
+
+    with running_test_webui() as (url, _service):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_function(
+                "document.documentElement.dataset.imageUrlDropReady === 'true'"
+            )
+            # Gradio handled the empty case correctly before this handler existed,
+            # so the handler must not touch it: taking it over gained nothing and
+            # put the first load of the session at risk.
+            page.evaluate(
+                DROP_FILE_JS,
+                [base64.b64encode(image.read_bytes()).decode("ascii"), "only.png"],
+            )
+            page.wait_for_timeout(500)
+
+            assert (
+                page.evaluate(
+                    "() => document.querySelector('#image-workspace input').files.length"
+                )
+                == 0
+            )
+            # And the click path, which is what a synthetic drop cannot exercise,
+            # still loads the first image.
+            page.locator('#image-workspace input[type="file"]').set_input_files(str(image))
+            expect(page.locator('#image-workspace img[src*="only.png"]')).to_be_visible()
+            browser.close()

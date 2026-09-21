@@ -100,6 +100,7 @@ class PromptCompiler:
                 f"Output at most {request.max_output_tags} tags.",
                 self._excluded_tags_prompt_text(request.excluded_tags),
                 self._preset_prompt_text(request.preset_name),
+                request.situation_guidance,
                 self._tag_subset_prompt_text(request.tag_subset, max_output_tags=request.max_output_tags),
                 source_text,
                 self._edit_prompt_text(request.edit_instruction),
