@@ -18,6 +18,9 @@ It is built for iterative anime image generation workflows: write a rough idea, 
 - Automatic Danbooru tag dictionary download when `data/tags.json` is missing.
 - Local image tagging with WD Tagger, plus a vision model that describes the image and reviews the inferred tags against it.
 - A local Web workbench for image-led work: prose prompts, next panels, and an uncensored vision model option.
+- 46 situations in five categories - what is going on in the picture - usable on their own, as a steer, or swept through several at once.
+- A hands-off run that invents a subject and picks the situations for you, for when you want an idea rather than a specific one.
+- Falls back to the CPU when another program is using the GPU, so it runs alongside an image generator instead of waiting for one.
 
 ## Setup
 
@@ -31,8 +34,11 @@ For natural-language compilation, start Ollama and make sure the selected model 
 
 ```bash
 ollama serve
-ollama pull llama3.2
+ollama pull qwen3:1.7b
 ```
+
+The CLI's own default is `llama3.2`, so pass `--model qwen3:1.7b` to use the one above rather than
+pulling a second model for the same job. The Web UI uses `qwen3:1.7b` without being asked.
 
 See [Local Model Environment](#local-model-environment) for the full model roster, the
 uncensored vision model, and the measured VRAM and throughput figures.
@@ -104,7 +110,7 @@ uv run danbooru-prompt --image path/to/image.png --general-threshold 0.4 --chara
 
 The default image tagger is [`SmilingWolf/wd-vit-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-tagger-v3). It runs locally through ONNX Runtime; the roughly 379 MB model is downloaded to the Hugging Face cache on first use. General and character tags use separate default thresholds of `0.35` and `0.85`, and output keeps canonical Danbooru underscores.
 
-## Web UI Prototype
+## Web UI
 
 Install the optional Web UI dependency, then pull the instruction router and prompt model plus a
 vision model for the description step:
@@ -121,15 +127,36 @@ Launch the local workbench:
 uv run danbooru-prompt-web
 ```
 
+It serves on **<http://127.0.0.1:7860>** and opens your browser there. Nothing is exposed to the
+network: it binds to the loopback address, and every model call goes to your own Ollama.
+
+| Option | Default | |
+| --- | --- | --- |
+| `--port` | `7860` | Another port, when something already has this one. |
+| `--host` | `127.0.0.1` | `0.0.0.0` to reach it from another machine on your network. |
+| `--no-inbrowser` | opens a browser | Leave the browser alone. The URL is printed either way. |
+
+The page has two tabs:
+
+- **`ワークベンチ`** - one image or instruction at a time. Pick what you want under `やりたいこと`
+  and the page shows only the controls that task can reach.
+- **`シチュエーション一括生成`** - one subject through several situations at once, or `おまかせ生成`
+  for a subject and situations chosen at random. See
+  [Generating one prompt per situation](#generating-one-prompt-per-situation).
+
+### The workbench tab
+
 `やりたいこと` at the top of the page is the first thing to set, and it decides what the rest of the page shows: every input the chosen action cannot reach is hidden, so a setting that would be silently ignored is never offered. `おまかせ` keeps the original behaviour - the router reads the instruction and picks - and shows only what the router can actually reach, which is why the natural-language template and its settings appear only under `自然文プロンプト`. The run button changes with it: one action per task, plus `停止`.
 
 The page is laid out to fit one screen on every task, which is what decides several things about it: the prompt boxes arrive with the run that fills them rather than waiting empty, the typed image URL lives in `詳細設定` because dropping and pasting are the paths people actually use, and `詳細設定` and `実行の詳細` share a line since both are opened rarely.
 
-Measured content height runs 466-881px across the seven tasks. Everything fits a 1920x1080 desktop; on a 1440x900 laptop three tasks fit and the rest run 41-151px over. What falls below the fold is the collapsed panels - the selector, the image, the instruction and the run button stay on screen. The situation dropdown is most of that: it was tried sharing the output count's line to save the height, which took its label with it and pushed the output count onto two lines, so it has a line of its own.
+Measured content height runs 514-929px across the seven tasks, and 1116px on the situation tab. Everything fits a 1920x1080 desktop; on a 1440x900 laptop three tasks fit and the rest run 39-149px over. What falls below the fold is the collapsed panels - the selector, the image, the instruction and the run button stay on screen. The situation dropdown is most of that: it was tried sharing the output count's line to save the height, which took its label with it and pushed the output count onto two lines, so it has a line of its own.
 
-Open `http://127.0.0.1:7860` if the browser does not open automatically. Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. The prototype uses `qwen3:1.7b` for both routing and prompt generation with deterministic settings. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
+Drop an image into the persistent upload area (dropping another image replaces it), paste a copied image with `Ctrl+V` anywhere on the page, or enter a direct HTTP/HTTPS image URL. The upload takes precedence when both are present. Entering a Japanese request such as `タグを推測して`, `夜に変更して`, or `次のコマで少女を振り返らせて` is enough; the router emits a constrained action JSON and calls the existing Python APIs. URL images are limited to 20 MB, verified as image data, stored only in a temporary file, and deleted after each request. Routing and prompt generation both default to `qwen3:1.7b`. Routing is deterministic, because a router that picks a different action for the same sentence is a router nobody can rely on; making a prompt from a description is not, because the same description coming back as the same tags every time makes a second look at it worthless. If the router model is unavailable or returns invalid JSON, deterministic keyword rules select a safe fallback action.
 
 Those two pulls are the light setup and are enough to use every feature. Swapping in the uncensored vision model is covered in [Running the vision steps](#running-the-vision-steps).
+
+### The next panel
 
 `next_panel` asks the vision model, because a next panel is a question about time and a tag list carries no time. Given the picture it answers in three lines - one sentence saying what the character does in the next instant, then the current tags that stop being true and the Danbooru tags that start being true. The sentence comes first deliberately: asked for tags alone the model returns the timid answer, and asked to say what happens first it commits to an action and the tags follow.
 
@@ -170,6 +197,8 @@ Two sliders describe the panel to ask for, because one was doing the work of bot
 | `0.7`-`1.0` | character | anything except who the character is |
 
 An image with no instruction is otherwise routed to plain tag extraction, so the main controls also carry a dedicated `次のコマ` button. It runs the next-panel action directly on whatever image is loaded, with or without an instruction, and fills all four boxes with panels at the selected change amount.
+
+### Situations
 
 `シチュエーション` says what kind of moment the picture is. There are 46 of them in five categories - 日常, 動作, やりとり, 場面, 感情 - covering 食事 and 家事 through 戦闘, 魔法・詠唱 and 隠密, 別れ and 手当て, 悪天候 and 夜の見張り, 怒り and 物思い. Each works two ways: on its own it is enough to generate from, and beside an instruction or an image it steers what is already there. The dropdown carries the category in each entry (`場面 / 夜の見張り`), since a dropdown cannot show headings and a flat list of forty-odd is one nobody reads to the end.
 
@@ -499,6 +528,9 @@ uv run python scripts/build_tag_subset.py shrine rain --posts 200 --min-count 5 
 ```
 
 ## Tasks
+
+Ideas not yet started. Web UI work is tracked separately in [Tasks.md](Tasks.md), with the
+finished ones in [docs/archive/web-ui-tasks.md](docs/archive/web-ui-tasks.md).
 
 - Expand dictionary filtering options, such as category and minimum post count.
 - Add stricter dictionary-only output correction for invented tags.
