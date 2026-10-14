@@ -1,5 +1,10 @@
 * text=auto eol=lf
 
+# cmd.exe needs CRLF: with LF endings a label is read as part of the line
+# before it, and `goto` lands nowhere.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 *.md text eol=lf
 *.py text eol=lf
 *.toml text eol=lf
