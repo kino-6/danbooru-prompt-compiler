@@ -127,6 +127,19 @@ Launch the local workbench:
 uv run danbooru-prompt-web
 ```
 
+On Windows, `run.cmd` does the same without the command having to be remembered - double-click it,
+or give it a word:
+
+| | |
+| --- | --- |
+| `run.cmd` | Open the Web UI. Extra arguments are passed through: `run.cmd web --port 7861`. |
+| `run.cmd cli ...` | Run the CLI: `run.cmd cli --image a.png`. |
+| `run.cmd test` | Run the tests. |
+| `run.cmd setup` | Install the dependencies again. |
+
+It starts Ollama if it is not already running. Without it every run fails on a bare connection
+error that reads like a bug in this project rather than a service that is not up.
+
 It serves on **<http://127.0.0.1:7860>** and opens your browser there. Nothing is exposed to the
 network: it binds to the loopback address, and every model call goes to your own Ollama.
 
